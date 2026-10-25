@@ -1,0 +1,2 @@
+# keep Windows line endings in the launcher exactly as committed (cmd.exe labels break with LF)
+*.bat -text

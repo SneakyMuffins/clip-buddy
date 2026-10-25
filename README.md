@@ -1,0 +1,121 @@
+# Clip Buddy
+
+**Stop drowning in 1 GB game clips.** Clip Buddy finds the moment each NVIDIA Instant Replay clip was saved for, lets you keep or delete it in a few seconds from the keyboard, trims what you keep to the moment without quality loss, and compresses it about 4.5× smaller.
+
+[![tests](https://github.com/SneakyMuffins/clip-buddy/actions/workflows/ci.yml/badge.svg)](https://github.com/SneakyMuffins/clip-buddy/actions/workflows/ci.yml)
+![platform](https://img.shields.io/badge/platform-Windows-blue)
+![python](https://img.shields.io/badge/python-3.10%2B-blue)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+![Review screen](docs/screenshots/review.png)
+
+A 90-second 1440p60 replay is about 1 GB, and you probably wanted 15 seconds of it. Clip Buddy turns that into a ~40 MB file with the moment in it, and gets you through a backlog of a hundred clips in one sitting.
+
+Everything runs locally. Nothing is uploaded, and nothing is deleted until you empty the Trash.
+
+## Features
+
+- **Finds the moment.** Audio loudness, voice and on-screen motion, weighted toward the end of the clip, because Instant Replay saves what happened *before* you pressed the hotkey. Shown as a waveform with the suggested range already set.
+- **Keyboard triage.** `K` keep, `T` keep for 30 days, `D` delete, `U` undo. Each clip starts playing just before its moment.
+- **Lossless trim.** Kept clips are cut to the range without re-encoding.
+- **Compression with a quality check.** HEVC on your GPU (NVIDIA, AMD or Intel) or the CPU. Every file is checked with VMAF and must score 95+ before it replaces the original.
+- **Back-to-back saves.** Pressed the hotkey twice? The pieces are detected and joined into one clip.
+- **Junk detection.** Flags double-press clips and clips where nothing happens, with a one-click queue to clear them.
+- **Sessions.** Clips are grouped by game and evening, so you can review a whole night at once.
+- **"Keep for 30 days".** For clips that only matter for a while: they come back for a decision when the time's up.
+- **Safe by design.** Every decision can be undone, replaced originals go to a restorable Trash, and new files are checked before old ones move.
+
+<table>
+<tr>
+<td><img src="docs/screenshots/library.png" alt="Library grouped by session"></td>
+<td><img src="docs/screenshots/space.png" alt="Space overview"></td>
+</tr>
+<tr>
+<td align="center">Library: grouped by session, hover to scrub</td>
+<td align="center">Space: where your disk went and how to get it back</td>
+</tr>
+</table>
+
+## Install
+
+### Windows, no setup (recommended)
+
+1. **Code → Download ZIP** on this page, and unzip it anywhere (for example `Documents\Clip Buddy`).
+2. Double-click **`ClipBuddy.bat`**.
+
+The first start installs anything missing (Python, ffmpeg) with `winget`, then asks you to run it again. After that it opens Clip Buddy in your browser and asks where your clips are. NVIDIA's default folder, `Videos\NVIDIA`, is detected automatically.
+
+### With pip
+
+Requires Python 3.10+ and [ffmpeg](https://ffmpeg.org/download.html) on your `PATH` (with libvmaf, which most full builds include).
+
+```bash
+pip install git+https://github.com/SneakyMuffins/clip-buddy.git
+clipbuddy
+```
+
+## Usage
+
+Keep the console window open while you use the app. New clips appear automatically, and the first run analyzes your library in the background (a few seconds per clip), so you can start reviewing right away.
+
+| Key | Action |
+|---|---|
+| `K` | Keep: move to Keepers, trim to the yellow range, compress |
+| `T` | Keep for 30 days, then ask again |
+| `D` | Delete (to Clip Buddy's Trash, restorable) |
+| `S` / `U` | Skip / Undo (decisions wait 8 s before touching the file) |
+| `W` | Whole clip ↔ suggested moment |
+| `A` | Jump the range to the other busy moment (hollow marker) |
+| `[` `]` | Set range start / end at the playhead, or drag the handles |
+| `Space`, `←` `→` | Play/pause, ±5 s |
+| `R`, `M`, `1`–`5` | Speed, mute, rating |
+
+Kept clips and the Trash live in a **`Clip Buddy Library`** folder next to your clips folder. Change the clips folder any time from the **Space** tab.
+
+## Configuration
+
+Your choices are saved in `config.json` next to the app. Optional keys:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `compress_keepers` | `true` | Compress kept clips |
+| `cq` | `28` | Compression strength: 28 ≈ 4.5× smaller, 24 ≈ 3× smaller at slightly higher quality |
+| `encoder` | `"auto"` | `nvenc`, `amf`, `qsv` or `x265` to force one |
+| `vmaf_min` | `95` | Minimum quality for a compressed file to replace the original |
+| `temp_days` | `30` | How long "keep for 30 days" lasts |
+| `grace_seconds` | `8` | Undo window before a decision touches the file |
+| `port` | `8765` | Local port of the web UI |
+
+## FAQ
+
+**Does it upload anything?** No. It's a local web app bound to `127.0.0.1`, and your clips never leave your PC.
+
+**Can it lose my clips?** Deleted clips and replaced originals go to Clip Buddy's Trash, and only **Empty trash** (hold the button for 1.5 s) deletes them for good. Trimmed and compressed files are verified before the original moves.
+
+**Does it work without an NVIDIA card?** Yes. Compression uses AMD or Intel hardware encoders when available, and the CPU otherwise. CPU encoding is slower (minutes per clip) at the same quality. The Space tab shows which encoder is in use.
+
+**Other recorders (AMD ReLive, OBS, Steam)?** Any folder of `.mp4` files works. The end-of-clip weighting and the file-name parsing are tuned for NVIDIA's `Game YYYY.MM.DD - HH.MM.SS.xx.DVR.mp4` names. Other names fall back to the file's date and folder name.
+
+**macOS / Linux?** The Python app is cross-platform, but only Windows is tested so far. Use the pip install.
+
+Read [how it works](docs/how-it-works.md) for the details: the moment scoring, the compression measurements and the safety rules.
+
+## Development
+
+```bash
+git clone https://github.com/SneakyMuffins/clip-buddy.git
+cd clip-buddy
+python -m venv .venv
+.venv\Scripts\pip install -e .[dev]
+.venv\Scripts\python -m clipbuddy
+```
+
+```bash
+.venv\Scripts\python -m pytest
+```
+
+The test builds a temporary library from generated clips and runs the full flow (detect, keep, trim, compress, undo, delete, restore, join, empty Trash). Set `CLIPBUDDY_TEST_ENCODER=x265` to test the CPU encoder. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+[MIT](LICENSE)

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clip Buddy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-route="review">
+<div class="app">
+  <nav class="nav">
+    <div class="brand"><i></i>CLIP BUDDY</div>
+    <a class="tab" data-go="review" href="#review">Review <span class="n" id="nReview"></span></a>
+    <a class="tab" data-go="library" href="#library">Library <span class="n" id="nLibrary"></span></a>
+    <a class="tab" data-go="space" href="#space">Space <span class="n" id="nSpace"></span></a>
+    <a class="tab" data-go="trash" href="#trash">Trash <span class="n" id="nTrash"></span></a>
+    <div class="bgline" id="bgline"></div>
+  </nav>
+
+  <!-- ================= REVIEW ================= -->
+  <section class="screen" id="review">
+    <div class="viewer">
+      <header class="vhead">
+        <div class="fname needs-clip" id="fname"></div>
+        <div class="queue"><span class="pos" id="pos"></span><select id="queueSel" aria-label="Queue"></select></div>
+      </header>
+      <div class="stage-wrap">
+        <div class="stage needs-clip"><video id="vid" preload="auto" playsinline></video></div>
+        <div class="empty"><h2>Nothing left to review</h2><p>Every clip in this queue has a decision.</p><span class="cap">switch queue above · U brings the last one back</span></div>
+      </div>
+      <div class="transport needs-clip">
+        <span class="tc" id="tc">00:00:00:00</span><span class="dur" id="dur"></span>
+        <div class="tbtns">
+          <button class="tbtn" data-key="back" onclick="App.nudge(-5)"><kbd>←</kbd>5 s</button>
+          <button class="tbtn" data-key="play" onclick="App.togglePlay()"><kbd>Space</kbd><span id="playLbl">Pause</span></button>
+          <button class="tbtn" data-key="fwd" onclick="App.nudge(5)">5 s<kbd>→</kbd></button>
+        </div>
+        <div class="grow"></div>
+        <div class="tbtns">
+          <button class="tbtn" data-key="speed" id="speedBtn" onclick="App.cycleSpeed()"><kbd>R</kbd><span id="speedLbl">1×</span></button>
+          <button class="tbtn" data-key="mute" id="muteBtn" onclick="App.toggleMute()"><kbd>M</kbd><span id="muteLbl">Sound on</span></button>
+        </div>
+      </div>
+      <div class="track needs-clip">
+        <div class="track-head">
+          <span class="cap">Moment</span>
+          <span class="readout" id="readout"></span>
+          <div class="track-tools">
+            <button class="tbtn" data-key="alt" id="altBtn" onclick="App.jumpAlt()"><kbd>A</kbd>Other moment</button>
+            <button class="tbtn" data-key="in" onclick="App.markIn()"><kbd>[</kbd>Start here</button>
+            <button class="tbtn" data-key="out" onclick="App.markOut()"><kbd>]</kbd>End here</button>
+            <button class="tbtn" data-key="whole" id="wholeBtn" onclick="App.toggleWhole()"><kbd>W</kbd>Whole clip</button>
+          </div>
+        </div>
+        <canvas id="tl"></canvas>
+      </div>
+      <div class="decide">
+        <button class="tile keep" data-key="keep" onclick="App.decide('keep')"><kbd>K</kbd><span class="big">Keep</span><span class="sm">trim to range<br>lossless</span></button>
+        <button class="tile temp" data-key="temp" onclick="App.decide('temp')"><kbd>T</kbd><span class="big">30 days</span><span class="sm">then ask<br>again</span></button>
+        <button class="tile del" data-key="trash" onclick="App.decide('trash')"><kbd>D</kbd><span class="big">Delete</span><span class="sm">to Trash<br>restorable</span></button>
+        <div class="minor">
+          <button class="mbtn" data-key="skip" onclick="App.skip()">Skip<kbd>S</kbd></button>
+          <button class="mbtn" data-key="undo" onclick="App.undo()">Undo<kbd>U</kbd></button>
+        </div>
+      </div>
+    </div>
+    <aside class="insp">
+      <div class="sec needs-clip"><div class="game" id="game"></div><div class="when" id="when"></div><dl class="props" id="props"></dl></div>
+      <div class="sec needs-clip"><div class="cap">Flags</div><div class="flags" id="flags"></div></div>
+      <div class="sec needs-clip"><div class="cap">Rating <kbd>1–5</kbd></div><div class="stars" id="stars"></div></div>
+      <div class="sec needs-clip"><div class="cap">Title</div><input type="text" id="title" placeholder="Name this moment" autocomplete="off"><div class="rename" id="rename"></div></div>
+      <div class="sec needs-clip"><div class="cap">Tags</div><div class="tags" id="tags"></div></div>
+      <div class="sec"><div class="cap">Up next</div><div class="next" id="next"></div></div>
+      <div class="sec"><div class="cap">Keys</div>
+        <div class="keys"><kbd>Space</kbd>Play / pause<kbd>← →</kbd>Back / forward 5 s<kbd>[ ]</kbd>Range start / end at playhead<kbd>W</kbd>Whole clip ↔ moment<kbd>A</kbd>Jump range to the other busy moment<kbd>R</kbd>Speed 1 · 1.5 · 2×<kbd>M</kbd>Mute<kbd>Shift</kbd>Drag handles without snapping</div>
+      </div>
+    </aside>
+  </section>
+
+  <!-- ================= LIBRARY ================= -->
+  <section class="screen" id="library">
+    <div class="bar">
+      <select id="fGame" aria-label="Game"></select>
+      <div class="seg" id="fStatus"></div>
+      <select id="fSort" aria-label="Sort">
+        <option value="session">By session</option><option value="biggest">Biggest</option><option value="rated">Best rated</option><option value="longest">Longest</option>
+      </select>
+      <input type="search" id="libSearch" placeholder="Search name, title, tag" autocomplete="off">
+      <span class="total" id="libTotal"></span>
+    </div>
+    <div class="junkbar" id="junkbar"><span id="junkText"></span><button class="btn" id="junkBtn"></button></div>
+    <div class="lib-scroll" id="libScroll"></div>
+  </section>
+
+  <!-- ================= SPACE ================= -->
+  <section class="screen" id="space"><div class="page" id="spacePage"></div></section>
+
+  <!-- ================= TRASH ================= -->
+  <section class="screen" id="trash">
+    <header class="trash-h"><h1>Trash</h1><span class="sub" id="trashSub"></span></header>
+    <div class="trash-list" id="trashList"></div>
+    <div class="danger" id="danger">
+      <div><h3>Empty trash</h3><p id="dangerText"></p></div>
+      <button class="hold" id="holdBtn"><span id="holdLbl"></span><small>hold 1.5 s</small></button>
+    </div>
+  </section>
+</div>
+<div class="setup" id="setup" hidden>
+  <div class="setup-card" role="dialog" aria-labelledby="setupTitle">
+    <div class="setup-brand"><i></i>CLIP BUDDY</div>
+    <h1 id="setupTitle">Where are your clips?</h1>
+    <p class="setup-sub">Pick the folder your clips are saved to. NVIDIA saves to <span class="mono">Videos\NVIDIA</span> unless you changed it.</p>
+    <div class="setup-cands" id="setupCands"></div>
+    <label class="cap" for="setupPath">Folder</label>
+    <div class="setup-pick"><input type="text" id="setupPath" placeholder="C:\Users\you\Videos\NVIDIA" autocomplete="off" spellcheck="false"><button class="btn" id="setupBrowse">Browse…</button></div>
+    <div class="setup-info" id="setupInfo"></div>
+    <div class="setup-acts"><button class="btn" id="setupCancel">Cancel</button><button class="btn primary" id="setupGo" disabled>Use this folder</button></div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status"><span id="toastMsg"></span><span class="t-undo" id="toastUndo"><button><kbd>U</kbd></button>to undo</span><i class="tbar"></i></div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clip-buddy"
+version = "0.1.0"
+description = "Review, keep and shrink your game clips: finds the moment each clip was saved for, keyboard triage, lossless trim, HEVC compression."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  "numpy>=1.26",
+  "pillow>=10",
+]
+keywords = ["nvidia", "shadowplay", "instant-replay", "clips", "video", "ffmpeg", "hevc", "gaming"]
+classifiers = [
+  "Environment :: Web Environment",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Video",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[project.scripts]
+clipbuddy = "clipbuddy.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/SneakyMuffins/clip-buddy"
+Issues = "https://github.com/SneakyMuffins/clip-buddy/issues"
+
+[tool.setuptools]
+packages = ["clipbuddy"]
+
+[tool.setuptools.package-data]
+clipbuddy = ["static/*"]
+
+[tool.ruff]
+line-length = 130
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

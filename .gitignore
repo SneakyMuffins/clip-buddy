@@ -1,0 +1,13 @@
+# local environment and personal data: never in the repo
+.venv/
+data/
+dist/
+config.json
+__pycache__/
+*.pyc
+# local reference frames (not part of the project)
+docs/design-refs/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
