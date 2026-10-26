@@ -38,12 +38,22 @@ Everything runs locally. Nothing is uploaded, and nothing is deleted until you e
 
 ## Install
 
-### Windows, no setup (recommended)
+### Windows download (recommended)
 
-1. **Code → Download ZIP** on this page, and unzip it anywhere (for example `Documents\Clip Buddy`).
+1. Download **`ClipBuddy-<version>-windows.zip`** from the [latest release](https://github.com/SneakyMuffins/clip-buddy/releases/latest).
+2. Unzip it somewhere permanent, for example `Documents\Clip Buddy`.
+3. Double-click **`ClipBuddy.exe`**.
+
+Nothing else to install: ffmpeg is included. Clip Buddy opens in your browser and asks where your clips are. NVIDIA's default folder, `Videos\NVIDIA`, is detected automatically.
+
+Windows may show "Windows protected your PC" the first time, because the exe is not code-signed: click **More info**, then **Run anyway**. To update, close Clip Buddy and unzip the new version over the old folder; your settings and library stay.
+
+### From source with `ClipBuddy.bat`
+
+1. **Code → Download ZIP** on this page, and unzip it anywhere.
 2. Double-click **`ClipBuddy.bat`**.
 
-The first start installs anything missing (Python, ffmpeg) with `winget`, then asks you to run it again. After that it opens Clip Buddy in your browser and asks where your clips are. NVIDIA's default folder, `Videos\NVIDIA`, is detected automatically.
+The first start installs anything missing (Python, ffmpeg) with `winget`, then asks you to run it again. After that it opens Clip Buddy in your browser.
 
 ### With pip
 
@@ -92,7 +102,7 @@ Your choices are saved in `config.json` next to the app. Optional keys:
 
 **Can it lose my clips?** Deleted clips and replaced originals go to Clip Buddy's Trash, and only **Empty trash** (hold the button for 1.5 s) deletes them for good. Trimmed and compressed files are verified before the original moves.
 
-**Does it work without an NVIDIA card?** Yes. Compression uses AMD or Intel hardware encoders when available, and the CPU otherwise. CPU encoding is slower (minutes per clip) at the same quality. The Space tab shows which encoder is in use.
+**Does it work without an NVIDIA card?** Yes. Compression uses AMD or Intel hardware encoders when available, and the CPU otherwise. With the Windows download, NVIDIA's encoder needs driver 570 or newer. CPU encoding is slower (minutes per clip) at the same quality. The Space tab shows which encoder is in use.
 
 **Other recorders (AMD ReLive, OBS, Steam)?** Any folder of `.mp4` files works. The end-of-clip weighting and the file-name parsing are tuned for NVIDIA's `Game YYYY.MM.DD - HH.MM.SS.xx.DVR.mp4` names. Other names fall back to the file's date and folder name.
 

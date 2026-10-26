@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Windows download: a portable `ClipBuddy.exe` with ffmpeg included, no Python needed. Built and attached to each GitHub release automatically.
+- Uses ffmpeg from an `ffmpeg` folder next to the app first, then the one on `PATH`.
+
 ## 0.1.0
 
 First release.

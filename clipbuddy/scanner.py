@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import db
-from .config import CFG
+from .config import CFG, ROOT
 
 # "<Game> 2026.01.18 - 20.48.30.06.DVR.mp4", optionally " - <title>" before .mp4 (our renames)
 NAME_RE = re.compile(
@@ -16,9 +16,13 @@ NAME_RE = re.compile(
     r"(?P<dvr>\.DVR)?(?: \((?:joined )?\d+\))?(?: - (?P<title>.+?))?\.mp4$", re.I)
 
 NOWIN = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+# ffmpeg/ffprobe: the copy bundled in "ffmpeg\" next to the app (the Windows download) first, then PATH.
+TOOLS = {n: str(ROOT / "ffmpeg" / f"{n}.exe") if (ROOT / "ffmpeg" / f"{n}.exe").exists() else n
+         for n in ("ffmpeg", "ffprobe")}
 
 
 def run(cmd, **kw):
+    cmd = [TOOLS.get(cmd[0], cmd[0]), *cmd[1:]]
     return subprocess.run(cmd, capture_output=True, creationflags=NOWIN, **kw)
 
 

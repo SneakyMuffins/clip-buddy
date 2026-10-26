@@ -11,3 +11,5 @@ docs/design-refs/
 .ruff_cache/
 *.egg-info/
 build/
+# ffmpeg bundled by tools/build_windows.py (or dropped in by hand)
+/ffmpeg/

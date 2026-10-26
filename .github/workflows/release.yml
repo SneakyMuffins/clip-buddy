@@ -1,0 +1,99 @@
+name: release
+
+# Pushing a tag like v0.1.0 builds the Windows download and attaches it to that tag's GitHub release.
+# A tag with a suffix (v0.1.0-rc1) makes a pre-release. Run by hand to build without releasing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  # BtbN's 8.1 branch is built against NVENC SDK 13.0 (NVIDIA driver 570+). 9.0 and later need driver 610+,
+  # and on older drivers Clip Buddy would quietly fall back to slow CPU encoding. Move up once 610+ is common.
+  FFMPEG_BUILD: ffmpeg-n8.1-latest-win64-gpl-shared-8.1
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Version
+        id: v
+        run: |
+          pyver=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            ver="${GITHUB_REF_NAME#v}"
+            if [[ "$ver" != "$pyver" && "$ver" != "$pyver"-* ]]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match the version in pyproject.toml ($pyver)"
+              exit 1
+            fi
+          else
+            ver="$pyver-dev"
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Download ffmpeg
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download latest -R BtbN/FFmpeg-Builds -p "$FFMPEG_BUILD.zip" -D ffdl
+          sha256sum "ffdl/$FFMPEG_BUILD.zip"
+          unzip -q "ffdl/$FFMPEG_BUILD.zip" -d ffdl
+
+      - name: Install
+        run: pip install -e . pyinstaller==6.22.3
+
+      - name: Build and smoke-test
+        id: build
+        run: python tools/build_windows.py --ffmpeg "ffdl/$FFMPEG_BUILD" --version "${{ steps.v.outputs.version }}"
+
+      - name: Keep the build (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipBuddy-${{ steps.v.outputs.version }}-windows
+          path: ${{ steps.build.outputs.zip }}
+
+      - name: Attach to the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+          ZIP: ${{ steps.build.outputs.zip }}
+          FFMPEG_VERSION: ${{ steps.build.outputs.ffmpeg_version }}
+        run: |
+          sha=$(sha256sum "$ZIP" | cut -d' ' -f1)
+          cat > notes.md <<EOF
+          ### Download
+
+          **ClipBuddy-$VERSION-windows.zip** below: unzip it somewhere permanent (for example \`Documents\\Clip Buddy\`) and double-click **ClipBuddy.exe**. No Python or ffmpeg install needed.
+
+          Windows may say "Windows protected your PC" the first time, because the exe is not code-signed: click **More info**, then **Run anyway**.
+
+          To update, close Clip Buddy and unzip the new version over the old folder; your settings stay.
+
+          What's new: see [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/CHANGELOG.md).
+
+          ### Bundled ffmpeg
+
+          The download includes an unmodified FFmpeg build from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) (\`$FFMPEG_BUILD\`, $FFMPEG_VERSION), licensed under the **GNU GPL v3**. Its license and source links are in the \`ffmpeg\` folder of the zip. Clip Buddy itself is MIT; it runs ffmpeg as a separate program.
+
+          SHA-256 of the zip: \`$sha\`
+          EOF
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$ZIP" --clobber
+          else
+            pre=""
+            [[ "$VERSION" == *-* ]] && pre="--prerelease"
+            gh release create "$GITHUB_REF_NAME" "$ZIP" --title "Clip Buddy $VERSION" --notes-file notes.md --verify-tag $pre
+          fi

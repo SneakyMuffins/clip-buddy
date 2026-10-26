@@ -2,12 +2,15 @@
 The clips folder is chosen in the app on first start and saved there."""
 import json
 import os
+import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+# The Windows download (ClipBuddy.exe, built with PyInstaller): the folder holding the exe.
+FROZEN = getattr(sys, "frozen", False)
+ROOT = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent.parent
 # Run from a downloaded folder: keep everything next to the app (portable).
 # Installed with pip: use the user's app-data folder, never site-packages.
-if (ROOT / "ClipBuddy.bat").exists() or (ROOT / "pyproject.toml").exists():
+if FROZEN or (ROOT / "ClipBuddy.bat").exists() or (ROOT / "pyproject.toml").exists():
     HOME = ROOT
 else:
     HOME = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share") / "ClipBuddy"
