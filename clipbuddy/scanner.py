@@ -86,12 +86,12 @@ def index_file(path, **extra):
 
 
 _unreadable = set()   # (path, size, mtime) that ffprobe failed on; retried only when the file changes
+_queue = []           # files found by the last folder walk that still need indexing: [(path, stat)]
+stats = {"pending_bytes": 0, "index_seconds": 0.0, "indexed": 0}   # for the progress estimate
 
 
-def scan(max_new=None):
-    """Add new/changed files, drop rows whose file is gone. Cheap when nothing changed.
-    With max_new, index at most that many files this call (so analysis can run in between).
-    Returns how many files are still waiting to be indexed."""
+def _walk_pending():
+    """One pass over the folders: drop rows whose file is gone, return new/changed files."""
     known = {r["path"]: r for r in db.q("SELECT id, path, size, mtime, busy FROM clips")}
     seen, pending = set(), []
     for path in walk():
@@ -115,10 +115,26 @@ def scan(max_new=None):
     for sp, r in known.items():
         if sp not in seen and not r["busy"] and not os.path.exists(sp):
             db.x("DELETE FROM clips WHERE id=?", (r["id"],))
-    batch = pending if max_new is None else pending[:max_new]
+    return pending
+
+
+def scan(max_new=None):
+    """Add new/changed files, drop rows whose file is gone. Cheap when nothing changed.
+    The folder is walked once; with max_new, at most that many files are indexed per call, so analysis
+    can run in between. Returns how many files are still waiting to be indexed."""
+    global _queue
+    if not _queue:
+        _queue = _walk_pending()
+    batch = _queue if max_new is None else _queue[:max_new]
+    _queue = [] if max_new is None else _queue[max_new:]
+    t = time.time()
     for path, st in batch:
         try:
-            index_file(path)
+            if path.exists():
+                index_file(path)
         except Exception:
             _unreadable.add((str(path), st.st_size, st.st_mtime))
-    return len(pending) - len(batch)
+    stats["index_seconds"] += time.time() - t
+    stats["indexed"] += len(batch)
+    stats["pending_bytes"] = sum(st.st_size for _, st in _queue)
+    return len(_queue)

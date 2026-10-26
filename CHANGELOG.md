@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2
+
+- **Accurate time-left estimate.** It's now based on gigabytes left and the speed measured so far, instead of a per-clip guess. On a 45-clip test library it was within 6 seconds on average of the real finish time. Before, it could be hours too high on big libraries.
+- **Faster reading of big folders:** the folder is walked once per scan instead of once per batch of files.
+
 ## 0.1.1
 
 - **Progress you can see:** the top bar shows "Reading folder · 120 files left", then "Analyzing 12 of 340 · about 35 min left".

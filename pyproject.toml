@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clip-buddy"
-version = "0.1.1"
+version = "0.1.2"
 description = "Review, keep and shrink your game clips: finds the moment each clip was saved for, keyboard triage, lossless trim, HEVC compression."
 readme = "README.md"
 license = "MIT"

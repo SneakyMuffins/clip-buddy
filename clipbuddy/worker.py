@@ -13,7 +13,7 @@ state = {
     "doing": None, "last_scan": 0.0,
     "to_index": 0,                          # files found but not indexed yet
     "analyzed_run": 0,                      # clips analyzed since the app started (for "12 of 340")
-    "sec_analyze": 8.0, "sec_index": 1.0,   # running averages, for the time-left estimate
+    "analyze_seconds": 0.0, "analyze_gb": 0.0,   # totals this run: the time-left estimate uses their ratio
     "priority": [],                         # clips the user is looking at: analyzed before the rest
 }
 _wake = threading.Event()
@@ -76,11 +76,7 @@ def step():
                   for pid in state["priority"])
     if not waiting and config.configured() and (state["to_index"] or time.time() - state["last_scan"] > 60):
         state["doing"] = "reading folder"
-        t = time.time()
-        before = state["to_index"]
         state["to_index"] = scanner.scan(max_new=INDEX_BATCH)
-        n = max(1, min(INDEX_BATCH, before or INDEX_BATCH))
-        state["sec_index"] = 0.8 * state["sec_index"] + 0.2 * ((time.time() - t) / n)
         if not state["to_index"]:
             state["last_scan"] = time.time()
         did = True
@@ -89,7 +85,9 @@ def step():
         c = db.one("SELECT id FROM clips WHERE id=? AND analyzed=0 AND status!='trash' AND busy=0", (pid,))
         if c:
             break
-    c = c or db.one("SELECT id FROM clips WHERE analyzed=0 AND status!='trash' AND busy=0 ORDER BY start_ts LIMIT 1")
+    c = c or db.one("SELECT id, size FROM clips WHERE analyzed=0 AND status!='trash' AND busy=0 ORDER BY start_ts LIMIT 1")
+    if c and "size" not in c:
+        c = db.one("SELECT id, size FROM clips WHERE id=?", (c["id"],))
     if c:
         state["doing"] = f"analyzing #{c['id']}"
         t = time.time()
@@ -98,7 +96,8 @@ def step():
         except Exception:
             traceback.print_exc()
             db.update(c["id"], analyzed=-1)
-        state["sec_analyze"] = 0.8 * state["sec_analyze"] + 0.2 * (time.time() - t)
+        state["analyze_seconds"] += time.time() - t
+        state["analyze_gb"] += (c["size"] or 0) / 1e9
         state["analyzed_run"] += 1
         did = True
     return did
@@ -115,6 +114,16 @@ def loop():
             state["doing"] = None
             _wake.wait(2)
             _wake.clear()
+
+
+def eta(bytes_to_analyze):
+    """Seconds left: video still to analyze (indexed or not) at the measured rate, plus indexing the rest."""
+    per_file = scanner.stats["index_seconds"] / scanner.stats["indexed"] if scanner.stats["indexed"] else 0.5
+    # overall rate so far, steadier than per-clip; before ~2 GB is done, lean on a typical 8 s per GB
+    done_gb = state["analyze_gb"]
+    sec_per_gb = (state["analyze_seconds"] + 8.0 * max(0.0, 2 - done_gb)) / (done_gb + max(0.0, 2 - done_gb))
+    gb = (bytes_to_analyze + scanner.stats["pending_bytes"]) / 1e9
+    return gb * sec_per_gb + state["to_index"] * per_file
 
 
 def start():

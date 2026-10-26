@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import actions, config, db, encoders, worker
+from . import actions, config, db, encoders, scanner, worker
 from .config import CFG, DATA
 
 STATIC = Path(__file__).parent / "static"
@@ -99,10 +99,11 @@ def status():
                 "WHERE state IN ('pending','running') ORDER BY j.id")
     errs = db.q("SELECT j.*, c.path FROM jobs j LEFT JOIN clips c ON c.id=j.clip_id "
                 "WHERE state='error' AND finished>? ORDER BY j.id DESC LIMIT 5", (time.time() - 3600,))
-    left = db.one("SELECT COUNT(*) n FROM clips WHERE analyzed=0 AND status!='trash'")["n"]
+    waiting = db.one("SELECT COUNT(*) n, SUM(size) b FROM clips WHERE analyzed=0 AND status!='trash'")
+    left = waiting["n"]
     tr = db.one("SELECT COUNT(*) n, SUM(size) s FROM clips WHERE status='trash'")
     w = worker.state
-    eta = left * w["sec_analyze"] + w["to_index"] * (w["sec_index"] + w["sec_analyze"])
+    eta = worker.eta(waiting["b"] or 0)
     return {"doing": w["doing"], "jobs": pend, "errors": errs, "to_analyze": left,
             "to_index": w["to_index"], "analyzed_run": w["analyzed_run"], "eta_seconds": round(eta),
             "trash": {"n": tr["n"], "size": tr["s"] or 0}}
@@ -369,6 +370,8 @@ def setup(r: SetupReq):
     info = setup_check(r)
     old = CFG["inbox"]
     config.save(inbox=info["path"])
+    scanner._queue.clear()   # files found in the old folder
+    worker.state["to_index"] = 0
     if old and os.path.normcase(old) != os.path.normcase(info["path"]):
         # unreviewed clips of the old folder are no longer part of the library; decisions stay
         for c in db.q("SELECT id, path FROM clips WHERE status='new'"):
