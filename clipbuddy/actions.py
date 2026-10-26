@@ -86,28 +86,45 @@ def trash(cid):
 
 def restore(cid):
     c = db.clip(cid)
-    if c["status"] != "trash":
-        return
-    dst = _free(c["prev_path"])
+    if c["status"] != "trash" or not c["trashed_at"]:
+        return  # still waiting for its undo window: nothing was moved yet
+    # a file found in the Trash folder without a record has no known origin: back to the clips folder
+    origin = c["prev_path"] or str(Path(CFG["inbox"]) / (c["game"] or "Restored") / Path(c["path"]).name)
+    dst = _free(origin)
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(c["path"], str(dst))
     back = c["prev_status"] if c["prev_status"] in ("keep", "temp") else "new"
-    db.update(cid, path=str(dst), status=back, prev_path=None, trashed_at=None, note=None,
-              keep_start=None, keep_end=None)
+    fields = dict(path=str(dst), status=back, prev_path=None, trashed_at=None, note=None,
+                  keep_start=None, keep_end=None)
+    if not (DATA / "analysis" / f"{cid}.json").exists():
+        fields["analyzed"] = 0   # e.g. an original saved before a trim: never analyzed, no thumbnails yet
+    db.update(cid, **fields)
 
 
 def empty_trash():
-    freed = 0
-    for c in db.q("SELECT id, path, size FROM clips WHERE status='trash' AND busy=0"):
+    """Deletes what is really in the Trash folder. A clip marked for Trash but still in its undo window
+    is not in the folder yet, and is left alone. A locked file is skipped and reported, not fatal."""
+    freed, locked = 0, []
+    trash_dir = os.path.normcase(str(Path(CFG["trash"]).resolve()))
+    for c in db.q("SELECT id, path, size FROM clips WHERE status='trash' AND busy=0 AND trashed_at IS NOT NULL"):
+        if not os.path.normcase(str(Path(c["path"]).resolve())).startswith(trash_dir):
+            continue
         try:
             os.remove(c["path"])
         except FileNotFoundError:
             pass
+        except OSError:
+            locked.append(Path(c["path"]).name)
+            continue
         freed += c["size"] or 0
         db.x("DELETE FROM clips WHERE id=?", (c["id"],))
         for f in (DATA / "thumbs").glob(f"{c['id']}_*"):
-            f.unlink()
+            f.unlink(missing_ok=True)
+        (DATA / "analysis" / f"{c['id']}.json").unlink(missing_ok=True)
     db.bump_stat("freed_bytes", freed)
+    if locked:
+        raise ActionError(f"freed {freed / 1e9:.1f} GB; {len(locked)} file(s) are open in another program and were "
+                          f"kept: {', '.join(locked[:3])}{' ...' if len(locked) > 3 else ''}")
     return freed
 
 
@@ -139,18 +156,27 @@ def compress(cid):
         return  # already HEVC/AV1: re-encoding would only lose quality
     src = Path(c["path"])
     tmp = src.with_name(src.stem + ".cb-hevc.mp4")
-    _ffmpeg(["-i", str(src), "-map", "0", *encoders.args(),
-             "-tag:v", "hvc1", "-c:a", "copy", "-movflags", "+faststart", str(tmp)])
-    try:
-        _check_duration(tmp, c["duration"])
-        score = _vmaf(tmp, src, c["duration"], c["fps"])
-        if score < CFG["vmaf_min"]:
-            raise ActionError(f"quality {score:.1f} below {CFG['vmaf_min']}; original kept")
-        if tmp.stat().st_size >= src.stat().st_size * 0.9:
-            raise ActionError("compressed file is not meaningfully smaller; original kept")
-    except Exception:
+    # Detailed footage can miss the quality bar at the default strength (measured: one racing clip scored
+    # 94.8 at cq 28). Then try once more a step gentler (~3x smaller instead of ~4.5x) before giving up.
+    scores = []
+    for cq in (CFG["cq"], CFG["cq"] - 4):
+        _ffmpeg(["-i", str(src), "-map", "0", *encoders.args(cq),
+                 "-tag:v", "hvc1", "-c:a", "copy", "-movflags", "+faststart", str(tmp)])
+        try:
+            _check_duration(tmp, c["duration"])
+            score = _vmaf(tmp, src, c["duration"], c["fps"])
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+        scores.append(f"{score:.1f}")
+        if score >= CFG["vmaf_min"]:
+            break
+    else:
         tmp.unlink(missing_ok=True)
-        raise
+        raise ActionError(f"quality {' then '.join(scores)}, below {CFG['vmaf_min']}; original kept")
+    if tmp.stat().st_size >= src.stat().st_size * 0.9:
+        tmp.unlink(missing_ok=True)
+        raise ActionError("compressed file is not meaningfully smaller; original kept")
     _copy_times(src, tmp)
     to_trash(src, note=f"original, replaced by the compressed version (quality {score:.1f}/100)", status_from="keep")
     os.replace(tmp, src)

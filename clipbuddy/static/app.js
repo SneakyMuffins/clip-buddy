@@ -12,7 +12,8 @@ const SESSION_GAP = 2 * 3600;
 const now = () => Date.now() / 1000;
 
 const api = async (url, body) => {
-  const r = await fetch(url, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  // X-Clip-Buddy: the server only accepts changes carrying it (other websites can't add it)
+  const r = await fetch(url, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Clip-Buddy': '1' }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
   return r.json();
 };
@@ -210,7 +211,7 @@ const App = {
   go(route) {
     this.route = route;
     if (route !== 'review') this.playing = false; else if (this.clip) this.playing = true;
-    if (route === 'space') this.refreshStats().then(() => this.emit('data'));
+    if (route === 'space' || route === 'trash') this.refreshStats().then(() => this.emit('data'));
     this.emit('route'); this.emit('transport');
   },
 
@@ -746,13 +747,16 @@ function renderSpace() {
 
 /* ================= trash ================= */
 function renderTrash() {
-  const items = App.trash, b = totalOf(items);
-  $('#trashSub').textContent = items.length ? `${F.plural(items.length, 'file')} · ${F.size(b)} · still on disk until you empty it` : '';
+  const items = App.trash, moved = items.filter(t => !t.pending), b = totalOf(moved);
+  const folder = App.summary.settings?.trash;
+  $('#trashSub').textContent = (items.length ? `${F.plural(moved.length, 'file')} · ${F.size(b)} · still on disk until you empty it` : '')
+    + (folder ? `${items.length ? ' · ' : ''}folder: ${folder}` : '');
   $('#trashList').innerHTML = items.length ? `<table><thead><tr><th>File</th><th>Why it's here</th><th class="th-r">Size</th><th>When</th><th></th></tr></thead><tbody>
     ${items.map(t => `<tr><td class="file">${esc(t.file)}</td><td class="note ${t.note === 'deleted' ? 'deleted' : ''}">${esc(t.note)}</td><td class="num">${F.size(t.size)}</td><td class="when">${t.pending ? 'in a moment' : F.ago(t.when)}</td><td class="act">${t.pending ? '<span class="trash-pending">U to undo</span>' : `<button class="btn" data-restore="${t.id}">Restore</button>`}</td></tr>`).join('')}</tbody></table>`
     : `<div class="trash-empty"><h2>Trash is empty</h2>Deleted clips and replaced originals land here first, so nothing is gone until you say so.</div>`;
-  $('#danger').style.display = items.length ? '' : 'none';
-  $('#dangerText').textContent = `Permanently deletes ${F.plural(items.length, 'file')} (${F.size(b)}) from disk. This is the only step in Clip Buddy that can't be undone.`;
+  $('#danger').style.display = moved.length ? '' : 'none';
+  $('#dangerText').textContent = `Permanently deletes ${F.plural(moved.length, 'file')} (${F.size(b)}) from disk. This is the only step in Clip Buddy that can't be undone.`
+    + (moved.length < items.length ? ` Clips still in their undo window are not included.` : '');
   $('#holdLbl').textContent = `Empty trash (${F.size(b)})`;
 }
 $('#trashList').onclick = e => { const r = e.target.closest('[data-restore]'); if (r) App.restore(r.dataset.restore); };

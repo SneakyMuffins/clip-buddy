@@ -51,6 +51,22 @@ async def _lifespan(app):
 
 app = FastAPI(title="Clip Buddy", lifespan=_lifespan)
 
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
+
+
+@app.middleware("http")
+async def _local_only(request, call_next):
+    """Only this PC's own Clip Buddy page may use the API.
+    - Host must be localhost: blocks DNS rebinding (a website pointing its own name at 127.0.0.1).
+    - Changes need the X-Clip-Buddy header. Browsers don't let other websites send custom headers to
+      localhost without asking first, and we never say yes, so a page you visit can't empty your Trash."""
+    host = (request.headers.get("host") or "").rsplit(":", 1)[0].lower()
+    if host not in LOCAL_HOSTS:
+        return Response("Clip Buddy only answers on localhost", status_code=400)
+    if request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get("x-clip-buddy") != "1":
+        return Response("missing X-Clip-Buddy header", status_code=403)
+    return await call_next(request)
+
 
 # ---------- reading ----------
 

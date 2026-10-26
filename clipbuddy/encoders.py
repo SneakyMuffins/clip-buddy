@@ -48,11 +48,11 @@ def pick():
     return _found
 
 
-def args():
+def args(cq=None):
     name = pick()
     if not name:
         raise RuntimeError("no HEVC encoder works on this PC (ffmpeg is missing libx265)")
-    return ENCODERS[name][1](CFG["cq"])
+    return ENCODERS[name][1](CFG["cq"] if cq is None else cq)
 
 
 def label():

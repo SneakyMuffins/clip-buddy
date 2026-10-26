@@ -64,7 +64,10 @@ def walk():
     for root in roots():
         if not root.exists():
             continue
-        for dirpath, _, files in os.walk(root):
+        for dirpath, dirs, files in os.walk(root):
+            # never walk into the app's own library (e.g. after choosing the parent folder as the clips folder)
+            dirs[:] = [d for d in dirs if d != "Clip Buddy Library"
+                       and not (CFG["trash"] and os.path.normcase(os.path.join(dirpath, d)) == os.path.normcase(CFG["trash"]))]
             for f in files:
                 if f.lower().endswith(".mp4") and ".cb-" not in f:
                     yield Path(dirpath) / f
@@ -78,7 +81,7 @@ def index_file(path, **extra):
     row = db.one("SELECT id, title FROM clips WHERE path=?", (str(path),))
     fields = dict(game=game, kind=kind, start_ts=start, size=st.st_size, mtime=st.st_mtime, **meta)
     if row:
-        db.update(row["id"], **fields, analyzed=0, **extra)
+        db.update(row["id"], **{"analyzed": 0, **fields, **extra})
         return row["id"]
     fields.update(path=str(path), title=title, **extra)
     cols = ", ".join(fields)
@@ -112,10 +115,25 @@ def _walk_pending():
         if (sp, st.st_size, st.st_mtime) in _unreadable:
             continue
         pending.append((path, st))
+    # The library folders are the truth: files in Trash or Keepers that have no record (for example after
+    # running a second copy of the app, which has its own records) are taken in as trashed / kept.
+    trash = Path(CFG["trash"]) if CFG["trash"] else None
+    if trash and trash.is_dir():
+        for f in trash.iterdir():
+            if f.suffix.lower() == ".mp4" and ".cb-" not in f.name and str(f) not in known:
+                try:
+                    pending.append((f, f.stat()))
+                except OSError:
+                    pass
     for sp, r in known.items():
         if sp not in seen and not r["busy"] and not os.path.exists(sp):
             db.x("DELETE FROM clips WHERE id=?", (r["id"],))
     return pending
+
+
+def _inside(path, folder):
+    return bool(folder) and os.path.normcase(str(Path(path).resolve())).startswith(
+        os.path.normcase(str(Path(folder).resolve())) + os.sep)
 
 
 def scan(max_new=None):
@@ -130,7 +148,14 @@ def scan(max_new=None):
     t = time.time()
     for path, st in batch:
         try:
-            if path.exists():
+            if not path.exists():
+                continue
+            new = not db.one("SELECT id FROM clips WHERE path=?", (str(path),))
+            if new and _inside(path, CFG["trash"]):
+                index_file(path, status="trash", trashed_at=st.st_mtime, note="found in the Trash folder", analyzed=1)
+            elif new and _inside(path, CFG["keepers"]):
+                index_file(path, status="keep")
+            else:
                 index_file(path)
         except Exception:
             _unreadable.add((str(path), st.st_size, st.st_mtime))

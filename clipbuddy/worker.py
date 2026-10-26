@@ -126,7 +126,24 @@ def eta(bytes_to_analyze):
     return gb * sec_per_gb + state["to_index"] * per_file
 
 
+def _remove_leftovers():
+    """Temp files from a trim/compress/join that was cut off when the app closed (a join's can be GBs).
+    Safe at startup: no job is running yet, and interrupted jobs start over from the original."""
+    from pathlib import Path
+    for root in [*scanner.roots(), Path(config.CFG["trash"]) if config.CFG["trash"] else None]:
+        if not root or not root.exists():
+            continue
+        for f in root.rglob("*.cb-*"):
+            if f.is_file() and f.suffix.lower() in (".mp4", ".txt"):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+
+
 def start():
     db.x("UPDATE jobs SET state='pending' WHERE state='running'")  # interrupted last time: try again
     db.x("UPDATE clips SET busy=0")
+    db.x("UPDATE clips SET analyzed=0 WHERE analyzed=-1")          # failed analyses get one retry per start
+    _remove_leftovers()
     threading.Thread(target=loop, daemon=True, name="clipbuddy-worker").start()
