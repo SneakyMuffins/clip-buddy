@@ -172,11 +172,17 @@ def compress(cid):
         if score >= CFG["vmaf_min"]:
             break
     else:
+        # not an error: the clip is kept as it is, at full quality. Recorded on the clip, not retried.
         tmp.unlink(missing_ok=True)
-        raise ActionError(f"quality {' then '.join(scores)}, below {CFG['vmaf_min']}; original kept")
+        db.update(cid, note=f"Not compressed: quality {' then '.join(scores)} was below {CFG['vmaf_min']}, "
+                            f"so the original quality was kept")
+        return None
     if tmp.stat().st_size >= src.stat().st_size * 0.9:
+        # e.g. older recordings made at a low bitrate: already compact, HEVC barely helps. Not an error.
+        saved = 1 - tmp.stat().st_size / src.stat().st_size
         tmp.unlink(missing_ok=True)
-        raise ActionError("compressed file is not meaningfully smaller; original kept")
+        db.update(cid, note=f"Not compressed: it is already compact (HEVC would save only {max(saved, 0):.0%})")
+        return None
     _copy_times(src, tmp)
     to_trash(src, note=f"original, replaced by the compressed version (quality {score:.1f}/100)", status_from="keep")
     os.replace(tmp, src)

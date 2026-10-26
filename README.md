@@ -96,6 +96,7 @@ Your choices are saved in `config.json` next to the app. Optional keys:
 | `vmaf_min` | `95` | Minimum quality for a compressed file to replace the original |
 | `temp_days` | `30` | How long "keep for 30 days" lasts |
 | `grace_seconds` | `8` | Undo window before a decision touches the file |
+| `analysis_workers` | `"auto"` | Clips analyzed at once. Auto: one per 4 CPU threads, at most 4 |
 | `port` | `8765` | Local port of the web UI |
 
 ## FAQ

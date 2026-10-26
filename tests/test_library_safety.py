@@ -99,6 +99,37 @@ def test_library_safety():
             check(db.clip(ids["21"]) is None and db.stat("freed_bytes") == size21, "the other file was deleted and counted")
             check(Path(db.clip(ids["22"])["path"]).exists(), "the locked file is still in Trash")
             locked.close()
+
+            # job order: a quick job queued after a slow one runs first
+            server.bulk(server.Ids(ids=[ids["20"]], action="compress"))        # slow (encode)
+            server.bulk(server.Ids(ids=[ids["22"]], action="restore"))         # quick (a move), queued later
+            j, claimed = worker._next_job()
+            check(j["kind"] == "restore", f"quick job goes first (picked {{j['kind']}})")
+            db.x("UPDATE jobs SET state='pending' WHERE id=?", (j["id"],)); [db.update(i, busy=0) for i in claimed]
+
+            # a clip being analyzed is not touched by a job
+            worker._analyzing.add(ids["22"])
+            j, claimed = worker._next_job()
+            check(j["kind"] == "compress", "job on a clip being analyzed waits; the next job runs instead")
+            db.x("UPDATE jobs SET state='pending' WHERE id=?", (j["id"],)); [db.update(i, busy=0) for i in claimed]
+            worker._analyzing.discard(ids["22"])
+            db.x("UPDATE jobs SET state='cancelled' WHERE kind='compress' AND state='pending'")
+            run_jobs()
+
+            # a clip that can't be compressed without visible loss is kept as it is, with a note, not an error
+            server.CFG["vmaf_min"] = 101   # unreachable
+            db.update(ids["20"], note=None)
+            server.bulk(server.Ids(ids=[ids["20"]], action="compress")); run_jobs()
+            c20 = db.clip(ids["20"])
+            last = db.one("SELECT state, error FROM jobs WHERE kind='compress' ORDER BY id DESC LIMIT 1")
+            check(last["state"] == "done" and (c20["note"] or "").startswith("Not compressed") and c20["vcodec"] == "h264",
+                  "quality bar missed: kept at full quality with a note, job not failed")
+            server.CFG["vmaf_min"] = 95
+
+            # leave one clip in Trash for the second-copy check below
+            server.CFG["grace_seconds"] = 0
+            server.decide(ids["22"], server.Decision(action="trash")); run_jobs()
+            check(Path(db.clip(ids["22"])["path"]).parent.name == "Trash", "clip back in Trash for the next part")
         """)
 
         trash = tmp / "Clip Buddy Library" / "Trash"

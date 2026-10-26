@@ -122,14 +122,15 @@ def status():
     eta = worker.eta(waiting["b"] or 0)
     return {"doing": w["doing"], "jobs": pend, "errors": errs, "to_analyze": left,
             "to_index": w["to_index"], "analyzed_run": w["analyzed_run"], "eta_seconds": round(eta),
+            "jobs_eta_seconds": round(worker.jobs_eta(pend)), "workers": w["workers"],
             "trash": {"n": tr["n"], "size": tr["s"] or 0}}
 
 
 
 @app.get("/api/stats")
 def stats():
-    rows = db.q("SELECT game, status, vcodec, COUNT(*) n, SUM(size) size, SUM(COALESCE(orig_size, size)) orig "
-                "FROM clips GROUP BY game, status, vcodec")
+    rows = db.q("SELECT game, status, vcodec, (note LIKE 'Not compressed%') uncompressible, COUNT(*) n, SUM(size) size, "
+                "SUM(COALESCE(orig_size, size)) orig FROM clips GROUP BY game, status, vcodec, uncompressible")
     games = {}
     tot = {"new": 0, "keep": 0, "temp": 0, "trash": 0}
     compressible = 0
@@ -140,7 +141,7 @@ def stats():
             g["size"] += r["size"] or 0
         g["by"][r["status"]] = g["by"].get(r["status"], 0) + (r["size"] or 0)
         tot[r["status"]] = tot.get(r["status"], 0) + (r["size"] or 0)
-        if r["status"] == "keep" and r["vcodec"] == "h264":
+        if r["status"] == "keep" and r["vcodec"] == "h264" and not r["uncompressible"]:
             compressible += r["size"] or 0
     saved_now = db.one("SELECT SUM(orig_size - size) s FROM clips WHERE orig_size IS NOT NULL AND status!='trash'")["s"] or 0
     junk = db.one("SELECT COUNT(*) n, SUM(size) s FROM clips WHERE status='new' AND (quiet=1 OR duration<5)")

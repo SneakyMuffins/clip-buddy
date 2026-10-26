@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.4
+
+- **Work runs in parallel.** Clips are analyzed several at a time (one per 4 CPU threads, at most 4). On an 8-core CPU that's about 4× faster. Analysis no longer stops while your keeps are being compressed.
+- **Deletes don't wait behind compression.** Quick jobs (deletes, moves, renames, restores) have their own lane. Before, a delete could wait half an hour behind a queue of compressions. Now it's done in seconds.
+- **The top bar shows what is really happening:** "Applying your decisions · 26 left · about 15 min" and "Analyzing 4 of 66 · about 8 min" side by side. Before, it said "Analyzing" while it was actually compressing.
+- **"Failed" is gone for clips that just weren't worth compressing.** A clip that would lose visible quality, or that is already compact (older recordings made at a low bitrate), is kept as it is with a note on the clip instead of an error. "Compress all" skips it from then on.
+- New clips are analyzed before kept clips that only need fresh thumbnails after a trim.
+- New setting `analysis_workers` (`"auto"` by default).
+
 ## 0.1.3
 
 Safety and correctness fixes. Updating is recommended.

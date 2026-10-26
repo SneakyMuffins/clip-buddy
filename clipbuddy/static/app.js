@@ -110,6 +110,7 @@ const App = {
       const b = this.summary.background;
       b.doing = st.doing; b.toAnalyze = st.to_analyze; b.queued = st.jobs.filter(j => j.state === 'pending').length; b.failed = st.errors;
       b.toIndex = st.to_index || 0; b.analyzedRun = st.analyzed_run || 0; b.eta = st.eta_seconds || 0;
+      b.jobsLeft = st.jobs.length; b.jobsEta = st.jobs_eta_seconds || 0;
       const sig = `${st.jobs.map(j => j.id + j.state).join(',')}|${st.to_analyze}|${st.to_index}|${st.trash.n}|${st.errors.length}`;
       if (sig !== this._sig) {
         const first = this._sig === undefined; this._sig = sig;
@@ -273,7 +274,7 @@ const App = {
     this.undoStack = this.undoStack.filter(u => u.type === 'skip');
     this.toast(`Deleting for good · ${F.size(bytes)}`, 'trash');
   },
-  compressible() { return this.clips.filter(c => c.status === 'keep' && c.vcodec === 'h264' && !c.compressed && !c.busy); },
+  compressible() { return this.clips.filter(c => c.status === 'keep' && c.vcodec === 'h264' && !c.compressed && !c.busy && !(c.note || '').startsWith('Not compressed')); },
   async compressAll() {
     const list = this.compressible(); if (!list.length) return;
     await api('/api/bulk', { action: 'compress', ids: list.map(c => c.id) });
@@ -341,6 +342,7 @@ const App = {
     if (c._chain) f.push({ key: 'chain', label: `Part ${c._chain.index} of ${c._chain.count} back-to-back saves`, tone: 'info', button: 'Join', action: 'joinChain' });
     if (c.trimmed) f.push({ key: 'trimmed', label: 'Already trimmed', tone: 'muted' });
     if (c.compressed) f.push({ key: 'compressed', label: 'Compressed', tone: 'muted' });
+    else if ((c.note || '').startsWith('Not compressed')) f.push({ key: 'uncompressed', label: c.note.includes('compact') ? 'Not compressed: already compact' : 'Kept at full quality: compressing it would have shown', tone: 'muted' });
     return f;
   },
   joinChain() { const c = this.clip; if (c && c._chain) this.join(c._chain.ids); },
@@ -518,15 +520,17 @@ function renderNav() {
   $('#nSpace').textContent = App.summary.drive ? Math.round(App.summary.drive.free / 1e9) + ' GB free' : '';
   $('#nTrash').textContent = App.trash.length ? F.size(tb) : 'empty';
   const fail = b.failed.length ? `<span class="fail" title="${esc(b.failed.map(f => `${f.kind}: ${f.error}`).join('\n'))}">${b.failed.length} failed</span>` : '';
-  let doing;
-  if (b.toIndex) doing = `Reading folder · ${b.toIndex} files left`;
-  else if (b.toAnalyze) doing = `Analyzing ${b.analyzedRun + 1} of ${b.analyzedRun + b.toAnalyze}`;
-  else doing = b.doing ? b.doing.replace(/#\d+/, '').trim() + '…' : 'idle';
-  const eta = (b.toIndex || b.toAnalyze) && b.eta > 30 ? `about ${F.eta(b.eta)} left` : '';
-  const keepOpen = b.toIndex || b.toAnalyze
-    ? '<span title="Analysis runs in the Clip Buddy window, not in this tab. You can close or reload this tab; keep that window open (minimized is fine).">keep the Clip Buddy window open</span>' : '';
-  $('#bgline').innerHTML = (b.doing ? '<i class="pulse"></i>' : '') +
-    [esc(doing), eta, b.queued ? `${b.queued} queued` : '', fail, keepOpen].filter(Boolean).join(' · ');
+  // two lanes run at once: your decisions (move, trim, compress) and reading/analyzing clips
+  const about = s => (s > 30 ? ` · about ${F.eta(s)}` : '');
+  const parts = [];
+  if (b.jobsLeft) parts.push(`Applying your decisions · ${b.jobsLeft} left${about(b.jobsEta)}`);
+  if (b.toIndex) parts.push(`Reading folder · ${b.toIndex} files left${about(b.eta)}`);
+  else if (b.toAnalyze) parts.push(`Analyzing ${b.analyzedRun + 1} of ${b.analyzedRun + b.toAnalyze}${about(b.eta)}`);
+  const working = parts.length > 0;
+  const keepOpen = working
+    ? '<span title="This work runs in the Clip Buddy window, not in this tab. You can close or reload this tab; keep that window open (minimized is fine).">keep the Clip Buddy window open</span>' : '';
+  $('#bgline').innerHTML = (working ? '<i class="pulse"></i>' : '') +
+    [...(working ? parts.map(esc) : ['idle']), fail, keepOpen].filter(Boolean).join(' · ');
 }
 App.on('data', () => { renderNav(); if (App.route === 'library') renderLibrary(); if (App.route === 'space') renderSpace(); if (App.route === 'trash') renderTrash(); if (App.route === 'review') { renderFlags(); renderNext(); renderPos(); } });
 

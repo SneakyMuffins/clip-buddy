@@ -70,7 +70,14 @@ If you press the hotkey again shortly after a save, NVIDIA's second clip does **
 
 ## Architecture
 
-Python serves a single-page UI on `http://localhost:8765`. ffmpeg and ffprobe do all the video work, numpy the analysis, Pillow the thumbnails, and SQLite stores the state. One background worker runs file jobs, analysis and folder rescans one at a time.
+Python serves a single-page UI on `http://localhost:8765`. ffmpeg and ffprobe do all the video work, numpy the analysis, Pillow the thumbnails, and SQLite stores the state.
+
+Background work runs in parallel lanes:
+- **Quick jobs** (deletes, moves, renames, restores) have their own lane, so they never wait behind an encode.
+- **Slow jobs** (trim + compress, join) run one at a time: the VMAF check is already CPU-heavy, and GPUs limit concurrent encodes.
+- **Reading and analysis** run on one thread per 4 CPU threads, at most 4. On an 8-core/16-thread CPU, 4 at once analyzed 3.9× faster than 1; 6 or 8 were no faster, because disk reads become the limit.
+
+A clip is claimed by one lane at a time, so it is never analyzed while a job moves or trims it. Analysis order: the clip on screen and the next two first, then unreviewed clips oldest first, then kept clips that only need fresh thumbnails after a trim.
 
 | File | Job |
 |---|---|
@@ -79,6 +86,6 @@ Python serves a single-page UI on `http://localhost:8765`. ffmpeg and ffprobe do
 | `clipbuddy/analyzer.py` | moment score, suggested range, thumbnails |
 | `clipbuddy/encoders.py` | pick the HEVC encoder this PC can run |
 | `clipbuddy/actions.py` | trash/restore, keep, trim, compress, join, rename |
-| `clipbuddy/worker.py` | background jobs, analysis, rescans |
+| `clipbuddy/worker.py` | the background lanes: quick jobs, slow jobs, analysis |
 | `clipbuddy/server.py` | HTTP API and static UI |
 | `clipbuddy/static/` | the UI (plain HTML/CSS/JS, no build step) |
