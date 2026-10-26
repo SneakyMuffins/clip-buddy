@@ -30,7 +30,7 @@ Open an issue with:
 2. Tag and push: `git tag v0.2.0` then `git push origin v0.2.0`. A tag with a suffix (`v0.2.0-rc1`) makes a pre-release.
 3. The `release` workflow builds `ClipBuddy-<version>-windows.zip`, starts it from a fresh folder to check it answers, and attaches it to the GitHub release. The tag must match the version in `pyproject.toml`.
 
-To build the same zip on your PC: download a BtbN `ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip` from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases/tag/latest), unzip it, then run `pip install -e . pyinstaller==6.22.3` and `python tools/build_windows.py --ffmpeg <unzipped folder>`. Running the workflow by hand (**Actions → release → Run workflow**) builds it without releasing.
+To build the same zip on your PC: download a BtbN `ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip` from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases/tag/latest), unzip it, then run `pip install -e . pyinstaller==6.22.3` and `python tools/build_windows.py --ffmpeg <unzipped folder>`. Running the workflow by hand (**Actions → release → Run workflow**) builds it without releasing, or, with *draft release* ticked, makes a draft release you can check and then publish.
 
 Why the download is built this way:
 - **PyInstaller onedir**, not onefile: onefile unpacks itself to a temp folder on every start, which is slower and trips antivirus more often.

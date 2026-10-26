@@ -1,11 +1,17 @@
 name: release
 
 # Pushing a tag like v0.1.0 builds the Windows download and attaches it to that tag's GitHub release.
-# A tag with a suffix (v0.1.0-rc1) makes a pre-release. Run by hand to build without releasing.
+# A tag with a suffix (v0.1.0-rc1) makes a pre-release. Run by hand to build only, or to make a draft
+# release (not public until published; publishing it creates the tag).
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      draft_release:
+        description: "Also make a draft release v<version> from this commit"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -38,9 +44,10 @@ jobs:
               exit 1
             fi
           else
-            ver="$pyver-dev"
+            ver="$pyver"
           fi
           echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "tag=v$ver" >> "$GITHUB_OUTPUT"
 
       - name: Download ffmpeg
         env:
@@ -65,9 +72,10 @@ jobs:
           path: ${{ steps.build.outputs.zip }}
 
       - name: Attach to the release
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || inputs.draft_release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
           VERSION: ${{ steps.v.outputs.version }}
           ZIP: ${{ steps.build.outputs.zip }}
           FFMPEG_VERSION: ${{ steps.build.outputs.ffmpeg_version }}
@@ -82,7 +90,7 @@ jobs:
 
           To update, close Clip Buddy and unzip the new version over the old folder; your settings stay.
 
-          What's new: see [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/CHANGELOG.md).
+          What's new: see [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/CHANGELOG.md).
 
           ### Bundled ffmpeg
 
@@ -90,10 +98,12 @@ jobs:
 
           SHA-256 of the zip: \`$sha\`
           EOF
-          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$ZIP" --clobber
+          if [[ "$GITHUB_REF_TYPE" != tag ]]; then
+            gh release create "$TAG" "$ZIP" --draft --target "$GITHUB_SHA" --title "Clip Buddy $VERSION" --notes-file notes.md
+          elif gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" --clobber
           else
             pre=""
             [[ "$VERSION" == *-* ]] && pre="--prerelease"
-            gh release create "$GITHUB_REF_NAME" "$ZIP" --title "Clip Buddy $VERSION" --notes-file notes.md --verify-tag $pre
+            gh release create "$TAG" "$ZIP" --title "Clip Buddy $VERSION" --notes-file notes.md --verify-tag $pre
           fi
