@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.3
+
+Safety and correctness fixes. Updating is recommended.
+
+- **Fixed: emptying the Trash could permanently delete a clip that never reached it.** A clip you pressed D on is only moved after its 8 s undo window. Emptying the Trash inside that window deleted it straight from your clips folder. Empty trash now deletes only files that are really in the Trash folder.
+- **Fixed: the Trash folder could be bigger than the app said.** A second copy of Clip Buddy (for example the `.bat` version and the exe, or an update unzipped into a new folder) keeps its own records, so it didn't know what the other copy had put in Trash. Each scan now takes in every file in the Trash and Keepers folders: unknown Trash files show up in the Trash (restorable), and unknown kept clips count as kept instead of unreviewed.
+- **Fixed: other websites could control Clip Buddy.** A page open in your browser could send commands to the local app, for example to empty your Trash. Changes now need a header only Clip Buddy's own page sends, and the app answers only on `localhost`.
+- **Fixed:** a file open in another program no longer stops Empty trash halfway, and the space freed before it is still counted.
+- **Fixed:** choosing a parent folder (for example `Videos` instead of `Videos\NVIDIA`) no longer pulls Clip Buddy's own Keepers and Trash back in as unreviewed clips.
+- **Fixed:** restoring a file without a known origin works (it goes back to the clips folder), and restored originals get their thumbnails and timeline.
+- **Better compression:** if a clip misses the quality bar, it's retried once at a gentler setting before the original is kept. A racing clip that scored 94.8 now compresses at 98.2.
+- Starting Clip Buddy while it's already running opens the running copy instead of failing.
+- Temp files left by an interrupted trim, compress or join are cleaned up at start, and clips that failed to analyze get one retry per start.
+- The Trash screen shows where the Trash folder is, and doesn't count clips still in their undo window.
+
 ## 0.1.2
 
 - **Accurate time-left estimate.** It's now based on gigabytes left and the speed measured so far, instead of a per-clip guess. On a 45-clip test library it was within 6 seconds on average of the real finish time. Before, it could be hours too high on big libraries.
