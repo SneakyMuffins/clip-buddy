@@ -2,10 +2,13 @@ name: release
 
 # Pushing a tag like v0.1.0 builds the Windows download and attaches it to that tag's GitHub release.
 # A tag with a suffix (v0.1.0-rc1) makes a pre-release. Run by hand to build only, or to make a draft
-# release (not public until published; publishing it creates the tag).
+# release (not public until published; publishing it creates the tag). A branch push that changes the
+# packaging builds and smoke-tests only.
 on:
   push:
     tags: ["v*"]
+    branches: ["**"]
+    paths: [".github/workflows/release.yml", "tools/build_windows.py", "tools/exe_entry.py", "pyproject.toml"]
   workflow_dispatch:
     inputs:
       draft_release:
@@ -64,12 +67,13 @@ jobs:
         id: build
         run: python tools/build_windows.py --ffmpeg "ffdl/$FFMPEG_BUILD" --version "${{ steps.v.outputs.version }}"
 
-      - name: Keep the build (manual runs)
-        if: github.event_name == 'workflow_dispatch'
+      - name: Keep the build (not a release)
+        if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: ClipBuddy-${{ steps.v.outputs.version }}-windows
           path: ${{ steps.build.outputs.zip }}
+          retention-days: 7
 
       - name: Attach to the release
         if: github.ref_type == 'tag' || inputs.draft_release
