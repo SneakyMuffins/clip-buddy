@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1
+
+- **Progress you can see:** the top bar shows "Reading folder · 120 files left", then "Analyzing 12 of 340 · about 35 min left".
+- **No more waiting for the whole folder:** files are indexed in small batches with analysis in between, so the first suggestions appear within seconds even on a big library.
+- **The clip on screen goes first:** a clip you open (and the next two in the queue) jumps the analysis line, so its suggested moment is ready in seconds.
+- Clips that arrive while the folder is still being read join the review queue automatically.
+- A file ffprobe can't read (corrupt, or still being written) is skipped instead of stalling the folder scan.
+- Clearer timeline message while a clip waits for analysis.
+
 ## Unreleased
 
 - Windows download: a portable `ClipBuddy.exe` with ffmpeg included, no Python needed. Built and attached to each GitHub release automatically.

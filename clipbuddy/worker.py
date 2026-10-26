@@ -7,7 +7,15 @@ import traceback
 
 from . import actions, analyzer, config, db, scanner
 
-state = {"doing": None, "last_scan": 0.0}
+INDEX_BATCH = 4   # files indexed per step, so the first clips get analyzed while a big folder is still being read
+
+state = {
+    "doing": None, "last_scan": 0.0,
+    "to_index": 0,                          # files found but not indexed yet
+    "analyzed_run": 0,                      # clips analyzed since the app started (for "12 of 340")
+    "sec_analyze": 8.0, "sec_index": 1.0,   # running averages, for the time-left estimate
+    "priority": [],                         # clips the user is looking at: analyzed before the rest
+}
 _wake = threading.Event()
 
 
@@ -62,21 +70,38 @@ def step():
             for i in ids:
                 db.update(i, busy=0)
         return True
-    if config.configured() and time.time() - state["last_scan"] > 60:
-        state["doing"] = "scanning folders"
-        scanner.scan()
-        state["last_scan"] = time.time()
-        return True
-    c = db.one("SELECT id, path FROM clips WHERE analyzed=0 AND status!='trash' AND busy=0 ORDER BY start_ts LIMIT 1")
+    did = False
+    # a clip the user is looking at goes before reading more of the folder
+    waiting = any(db.one("SELECT id FROM clips WHERE id=? AND analyzed=0 AND status!='trash' AND busy=0", (pid,))
+                  for pid in state["priority"])
+    if not waiting and config.configured() and (state["to_index"] or time.time() - state["last_scan"] > 60):
+        state["doing"] = "reading folder"
+        t = time.time()
+        before = state["to_index"]
+        state["to_index"] = scanner.scan(max_new=INDEX_BATCH)
+        n = max(1, min(INDEX_BATCH, before or INDEX_BATCH))
+        state["sec_index"] = 0.8 * state["sec_index"] + 0.2 * ((time.time() - t) / n)
+        if not state["to_index"]:
+            state["last_scan"] = time.time()
+        did = True
+    c = None
+    for pid in state["priority"]:
+        c = db.one("SELECT id FROM clips WHERE id=? AND analyzed=0 AND status!='trash' AND busy=0", (pid,))
+        if c:
+            break
+    c = c or db.one("SELECT id FROM clips WHERE analyzed=0 AND status!='trash' AND busy=0 ORDER BY start_ts LIMIT 1")
     if c:
         state["doing"] = f"analyzing #{c['id']}"
+        t = time.time()
         try:
             analyzer.analyze(c["id"])
         except Exception:
             traceback.print_exc()
             db.update(c["id"], analyzed=-1)
-        return True
-    return False
+        state["sec_analyze"] = 0.8 * state["sec_analyze"] + 0.2 * (time.time() - t)
+        state["analyzed_run"] += 1
+        did = True
+    return did
 
 
 def loop():

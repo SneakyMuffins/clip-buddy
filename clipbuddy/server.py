@@ -101,8 +101,12 @@ def status():
                 "WHERE state='error' AND finished>? ORDER BY j.id DESC LIMIT 5", (time.time() - 3600,))
     left = db.one("SELECT COUNT(*) n FROM clips WHERE analyzed=0 AND status!='trash'")["n"]
     tr = db.one("SELECT COUNT(*) n, SUM(size) s FROM clips WHERE status='trash'")
-    return {"doing": worker.state["doing"], "jobs": pend, "errors": errs, "to_analyze": left,
+    w = worker.state
+    eta = left * w["sec_analyze"] + w["to_index"] * (w["sec_index"] + w["sec_analyze"])
+    return {"doing": w["doing"], "jobs": pend, "errors": errs, "to_analyze": left,
+            "to_index": w["to_index"], "analyzed_run": w["analyzed_run"], "eta_seconds": round(eta),
             "trash": {"n": tr["n"], "size": tr["s"] or 0}}
+
 
 
 @app.get("/api/stats")
@@ -265,6 +269,14 @@ def bulk(b: Ids):
             db.add_job(cid, b.action)
     worker.wake()
     return {"queued": len(b.ids)}
+
+
+@app.post("/api/prioritize")
+def prioritize(b: Ids):
+    """The clips the user is looking at get analyzed next."""
+    worker.state["priority"] = b.ids[:3]
+    worker.wake()
+    return {"ok": True}
 
 
 @app.post("/api/merge")

@@ -69,7 +69,21 @@ def test_end_to_end():
     make_clip(T0 + timedelta(minutes=10, seconds=12), 12)                    #   the second starts where the first ended
     tiny = make_clip(T0 + timedelta(minutes=20), 1.5)
 
-    from clipbuddy import db, encoders, server, worker
+    from clipbuddy import db, encoders, scanner, server, worker
+    check(scanner.scan(max_new=2) == 2, "indexing in batches: 2 indexed, 2 still waiting")
+    check(scanner.scan() == 0, "rest of the folder indexed")
+
+    # the clip on screen jumps the analysis line: the newest clip goes before the three older ones
+    tiny_id = db.one("SELECT id FROM clips WHERE path=?", (str(tiny),))["id"]
+    server.prioritize(server.Ids(ids=[tiny_id]))
+    worker.state["last_scan"] = time.time()
+    worker.step()
+    done = {c["id"] for c in db.q("SELECT id FROM clips WHERE analyzed=1")}
+    check(done == {tiny_id}, "prioritized clip analyzed first")
+    st = server.status()
+    check(st["to_analyze"] == 3 and st["to_index"] == 0 and st["eta_seconds"] > 0,
+          f"progress reported: {st['to_analyze']} to analyze, about {st['eta_seconds']} s left")
+
     worker.state["last_scan"] = 0
     run_jobs()                                                               # scan + analyze everything
     clips = {Path(c["path"]).name: c for c in db.q("SELECT * FROM clips")}

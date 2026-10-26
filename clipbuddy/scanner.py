@@ -85,11 +85,15 @@ def index_file(path, **extra):
     return db.x(f"INSERT INTO clips({cols}) VALUES ({', '.join('?' * len(fields))})", tuple(fields.values()))
 
 
-def scan():
-    """Add new/changed files, drop rows whose file is gone. Cheap when nothing changed."""
+_unreadable = set()   # (path, size, mtime) that ffprobe failed on; retried only when the file changes
+
+
+def scan(max_new=None):
+    """Add new/changed files, drop rows whose file is gone. Cheap when nothing changed.
+    With max_new, index at most that many files this call (so analysis can run in between).
+    Returns how many files are still waiting to be indexed."""
     known = {r["path"]: r for r in db.q("SELECT id, path, size, mtime, busy FROM clips")}
-    seen = set()
-    added = 0
+    seen, pending = set(), []
     for path in walk():
         sp = str(path)
         seen.add(sp)
@@ -105,9 +109,16 @@ def scan():
         # NVIDIA may still be writing a fresh file; wait until it is a few seconds old
         if not r and st.st_mtime > time.time() - 5:
             continue
-        index_file(path)
-        added += 1
+        if (sp, st.st_size, st.st_mtime) in _unreadable:
+            continue
+        pending.append((path, st))
     for sp, r in known.items():
         if sp not in seen and not r["busy"] and not os.path.exists(sp):
             db.x("DELETE FROM clips WHERE id=?", (r["id"],))
-    return added
+    batch = pending if max_new is None else pending[:max_new]
+    for path, st in batch:
+        try:
+            index_file(path)
+        except Exception:
+            _unreadable.add((str(path), st.st_size, st.st_mtime))
+    return len(pending) - len(batch)

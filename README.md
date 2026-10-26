@@ -66,7 +66,9 @@ clipbuddy
 
 ## Usage
 
-Keep the console window open while you use the app. New clips appear automatically, and the first run analyzes your library in the background (a few seconds per clip), so you can start reviewing right away.
+The first run analyzes your library in the background, a few seconds per clip. The top bar shows how far along it is and roughly how long is left. You can start reviewing right away: the clip you're looking at is always analyzed first.
+
+**Analysis runs in the Clip Buddy console window, not in the browser.** Close or reload the browser tab whenever you like; reopen `http://localhost:8765` to come back. Keep the console window open (minimized is fine) while it works. If you close it, nothing is lost: finished clips stay analyzed, and it continues where it stopped next time. New clips appear automatically while it runs.
 
 | Key | Action |
 |---|---|

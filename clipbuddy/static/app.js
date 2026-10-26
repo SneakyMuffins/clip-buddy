@@ -40,6 +40,7 @@ const F = {
   spec(c) { return `${c.height}p${Math.round(c.fps || 0)} ${F.codec(c.vcodec)} · ${Math.round(c.size * 8 / Math.max(c.duration, .1) / 1e6)} Mbit/s`; },
   kind: c => c.kind === 'replay' ? 'Instant replay' : 'Manual recording',
   plural: (n, w, p = w + 's') => `${n} ${n === 1 ? w : p}`,
+  eta(sec) { const m = Math.round(sec / 60); return m < 1 ? 'under a minute' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; },
 };
 const poster = c => `/thumb/${c.id}/poster?v=${c.size}`;
 const strip = c => `/thumb/${c.id}/sprite?v=${c.size}`;
@@ -55,7 +56,7 @@ const QUEUES = [
 
 const App = {
   clips: [], trash: [], byId: {}, chains: [], sessions: [],
-  summary: { drive: null, freed: 0, detection: { matched: 0, of: 0 }, background: { doing: null, toAnalyze: 0, queued: 0, failed: [] } },
+  summary: { drive: null, freed: 0, detection: { matched: 0, of: 0 }, background: { doing: null, toAnalyze: 0, toIndex: 0, analyzedRun: 0, eta: 0, queued: 0, failed: [] } },
   route: 'review', queueKey: 'oldest', customLabel: '', queue: [], pos: 0,
   speed: 1, muted: false, uiState: {}, undoStack: [], _l: {},
   on(ev, fn) { (this._l[ev] ??= []).push(fn); },
@@ -107,14 +108,21 @@ const App = {
       const st = await api('/api/status');
       const b = this.summary.background;
       b.doing = st.doing; b.toAnalyze = st.to_analyze; b.queued = st.jobs.filter(j => j.state === 'pending').length; b.failed = st.errors;
-      const sig = `${st.jobs.map(j => j.id + j.state).join(',')}|${st.to_analyze}|${st.trash.n}|${st.errors.length}`;
+      b.toIndex = st.to_index || 0; b.analyzedRun = st.analyzed_run || 0; b.eta = st.eta_seconds || 0;
+      const sig = `${st.jobs.map(j => j.id + j.state).join(',')}|${st.to_analyze}|${st.to_index}|${st.trash.n}|${st.errors.length}`;
       if (sig !== this._sig) {
         const first = this._sig === undefined; this._sig = sig;
         if (!first) {
           const cur = this.clip, wasAnalyzing = cur && !cur.analyzed;
           await this.refresh();
-          if (this.queueKey !== 'custom') this.queue = this.queue.filter(id => this.byId[id]);
-          if (!this.queue.length && this.queueKey !== 'custom') this.setQueue(this.queueKey);   // clips arriving after a fresh scan
+          if (this.queueKey !== 'custom') {
+            // rebuild so clips that arrived while the folder was being read join the queue; stay on the same clip
+            const cur = this.queue[this.pos];
+            this.queue = this.buildQueue(this.queueKey);
+            const at = this.queue.indexOf(cur);
+            if (at >= 0) this.pos = at; else if (this.pos >= this.queue.length) this.pos = Math.max(0, this.queue.length - 1);
+            if (!cur && this.queue.length) this.load();
+          }
           if (cur && wasAnalyzing && this.byId[cur.id]?.analyzed) { delete this.uiState[cur.id]; this.emit('change-soft'); }
         }
         if (this.route === 'space') await this.refreshStats();
@@ -194,6 +202,9 @@ const App = {
         v.onloadedmetadata = () => { v.currentTime = start; if (this.route === 'review') v.play().catch(() => {}); };
       }
     } else { v.pause(); v.removeAttribute('src'); delete v.dataset.src; v.load(); }
+    // the clip on screen (and the next two) jump the analysis line if they still need it
+    const waiting = this.queue.slice(this.pos, this.pos + 3).filter(id => this.byId[id] && !this.byId[id].analyzed && !this.byId[id].failed);
+    if (waiting.length) api('/api/prioritize', { ids: waiting }).catch(() => {});
     this.emit('change');
   },
   go(route) {
@@ -482,7 +493,8 @@ class Timeline {
     ctx.strokeStyle = k.tick; ctx.lineWidth = 1;
     for (let x = X0 - (y1 - y0) + off; x < X1; x += 16) { ctx.beginPath(); ctx.moveTo(x, y1); ctx.lineTo(x + (y1 - y0), y0); ctx.stroke(); }
     ctx.restore();
-    const msg = 'Analyzing… no moment yet, keeping the whole clip'; ctx.font = k.font;
+    const msg = App.clip && App.clip.failed ? 'Could not analyze this clip: keeping the whole clip'
+      : 'Analyzing this clip… the suggested moment appears in a few seconds'; ctx.font = k.font;
     const tw = ctx.measureText(msg).width; ctx.fillStyle = k.bg; ctx.fillRect((X0 + X1) / 2 - tw / 2 - 10, (y0 + y1) / 2 - 11, tw + 20, 22);
     ctx.fillStyle = k.text; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(msg, (X0 + X1) / 2, (y0 + y1) / 2); ctx.textAlign = 'left';
   }
@@ -504,10 +516,16 @@ function renderNav() {
   $('#nLibrary').textContent = lib.length;
   $('#nSpace').textContent = App.summary.drive ? Math.round(App.summary.drive.free / 1e9) + ' GB free' : '';
   $('#nTrash').textContent = App.trash.length ? F.size(tb) : 'empty';
-  const doing = b.doing ? b.doing.replace(/#\d+/, '').trim() + '…' : 'idle';
   const fail = b.failed.length ? `<span class="fail" title="${esc(b.failed.map(f => `${f.kind}: ${f.error}`).join('\n'))}">${b.failed.length} failed</span>` : '';
+  let doing;
+  if (b.toIndex) doing = `Reading folder · ${b.toIndex} files left`;
+  else if (b.toAnalyze) doing = `Analyzing ${b.analyzedRun + 1} of ${b.analyzedRun + b.toAnalyze}`;
+  else doing = b.doing ? b.doing.replace(/#\d+/, '').trim() + '…' : 'idle';
+  const eta = (b.toIndex || b.toAnalyze) && b.eta > 30 ? `about ${F.eta(b.eta)} left` : '';
+  const keepOpen = b.toIndex || b.toAnalyze
+    ? '<span title="Analysis runs in the Clip Buddy window, not in this tab. You can close or reload this tab; keep that window open (minimized is fine).">keep the Clip Buddy window open</span>' : '';
   $('#bgline').innerHTML = (b.doing ? '<i class="pulse"></i>' : '') +
-    [esc(doing), b.toAnalyze ? `${b.toAnalyze} to analyze` : '', b.queued ? `${b.queued} queued` : '', fail].filter(Boolean).join(' · ');
+    [esc(doing), eta, b.queued ? `${b.queued} queued` : '', fail, keepOpen].filter(Boolean).join(' · ');
 }
 App.on('data', () => { renderNav(); if (App.route === 'library') renderLibrary(); if (App.route === 'space') renderSpace(); if (App.route === 'trash') renderTrash(); if (App.route === 'review') { renderFlags(); renderNext(); renderPos(); } });
 
