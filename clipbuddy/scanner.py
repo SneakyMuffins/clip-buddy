@@ -126,8 +126,11 @@ def _walk_pending():
                 except OSError:
                     pass
     for sp, r in known.items():
-        if sp not in seen and not r["busy"] and not os.path.exists(sp):
-            db.x("DELETE FROM clips WHERE id=?", (r["id"],))
+        if sp not in seen and not os.path.exists(sp):
+            # the list above is from the start of the walk: a job may have moved the clip since then
+            now = db.one("SELECT path, busy FROM clips WHERE id=?", (r["id"],))
+            if now and now["path"] == sp and not now["busy"] and not os.path.exists(sp):
+                db.x("DELETE FROM clips WHERE id=?", (r["id"],))
     return pending
 
 

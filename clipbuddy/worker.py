@@ -9,6 +9,8 @@ A clip is claimed by one lane at a time, so it is never analyzed while a job mov
 """
 import json
 import os
+import re
+import shutil
 import threading
 import time
 import traceback
@@ -215,18 +217,58 @@ def jobs_eta(pending):
 
 # ---------- start ----------
 
+def _in_trash(name):
+    trash = config.CFG["trash"]
+    return Path(trash) / name if trash and (Path(trash) / name).exists() else None
+
+
 def _remove_leftovers():
     """Temp files from a trim/compress/join that was cut off when the app closed (a join's can be GBs).
-    Safe at startup: no job is running yet, and interrupted jobs start over from the original."""
+    Safe at startup: no job is running yet, and interrupted jobs start over from the original.
+    A finished trim/compress whose original already went to the Trash is the clip itself: it is put in
+    place, never deleted."""
     for root in [*scanner.roots(), Path(config.CFG["trash"]) if config.CFG["trash"] else None]:
         if not root or not root.exists():
             continue
         for f in root.rglob("*.cb-*"):
-            if f.is_file() and f.suffix.lower() in (".mp4", ".txt"):
-                try:
+            if not (f.is_file() and f.suffix.lower() in (".mp4", ".txt")):
+                continue
+            m = re.match(r"^(.+)\.cb-(?:hevc|trim)\.mp4$", f.name)
+            original = f.with_name(m[1] + ".mp4") if m else None
+            try:
+                if original and not original.exists() and _in_trash(original.name):
+                    os.replace(f, original)
+                    _mark_original(_in_trash(original.name), original)
+                else:
                     f.unlink()
-                except OSError:
-                    pass
+            except OSError:
+                pass
+
+
+def _mark_original(trashed, kept):
+    t = db.one("SELECT id FROM clips WHERE path=?", (str(trashed),))
+    if t:
+        db.update(t["id"], prev_path=str(kept), prev_status="keep", note="original, replaced by the kept version")
+
+
+def _repair_failed_keeps():
+    """Up to 0.1.4, keeping a clip whose name doesn't follow NVIDIA's pattern could fail after its original
+    had gone to the Trash, leaving the kept clip missing from Keepers. Put those originals back as kept."""
+    keepers = config.CFG["keepers"]
+    if not keepers:
+        return
+    for j in db.q("SELECT id, error FROM jobs WHERE state='error' AND kind IN ('keep', 'compress')"):
+        for raw in re.findall(r"'([^']+\.mp4)'", j["error"] or ""):
+            kept = Path(raw.replace("\\\\", "\\"))
+            trashed = _in_trash(kept.name)
+            if not scanner._inside(kept, keepers) or kept.exists() or not trashed:
+                continue
+            kept.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(trashed), str(kept))
+            db.x("DELETE FROM clips WHERE path=?", (str(trashed),))
+            cid = scanner.index_file(kept, status="keep")
+            db.add_job(cid, "compress")
+            db.x("UPDATE jobs SET state='done', error=? WHERE id=?", ("repaired: the original is back in Keepers", j["id"]))
 
 
 def start():
@@ -234,6 +276,7 @@ def start():
     db.x("UPDATE clips SET busy=0")
     db.x("UPDATE clips SET analyzed=0 WHERE analyzed=-1")          # failed analyses get one retry per start
     _remove_leftovers()
+    _repair_failed_keeps()
     state["workers"] = analysis_workers()
     # quick jobs (deletes, moves, renames) get their own lane so they never wait behind an encode
     threading.Thread(target=_lane, args=(lambda: job_step("quick"), "quick jobs"), daemon=True, name="clipbuddy-quick").start()

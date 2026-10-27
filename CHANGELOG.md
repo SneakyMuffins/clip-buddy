@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.5
+
+Fixes a bug that could lose kept clips. **Update now**, and don't empty the Trash until the update has started once.
+
+- **Fixed: keeping a clip with a non-standard file name could leave its only copy in the Trash.** Affected names don't follow NVIDIA's pattern, for example clips cut with the Windows Photos trimmer (`... .DVR-00.04.06.082-00.04.59.430.mp4`). The original went to the Trash, then a later step failed. The smaller compressed copy was then cleaned up at the next start, so emptying the Trash deleted the clip for good.
+- **Repair on first start:** clips already caught by this bug are put back. If the compressed copy is still there it takes its place; otherwise the original is moved from the Trash back to Keepers and compressed again. Nothing is repaired once the Trash has been emptied.
+- **Kept clips are now protected at every step.** If replacing a clip with its trimmed or compressed version fails at any point, the original is put back where it was. A finished copy left by an interrupted job is put in place at start instead of being deleted. Empty trash never deletes an original whose kept version is missing.
+- **Fixed:** a clip moved by a job while the folder was being read could lose its record (its rating, tags and title).
+
 ## 0.1.4
 
 - **Work runs in parallel.** Clips are analyzed several at a time (one per 4 CPU threads, at most 4). On an 8-core CPU that's about 4× faster. Analysis no longer stops while your keeps are being compressed.

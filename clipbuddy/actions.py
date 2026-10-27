@@ -66,17 +66,36 @@ def to_trash(path, note=None, status_from="new", clip_id=None):
     """Move a file into the Trash folder and record it. Returns the trash row id."""
     src = Path(path)
     dst = _free(Path(CFG["trash"]) / src.name)
+    if not clip_id:
+        # read before the move: names that don't follow NVIDIA's pattern fall back to the file's own
+        # date and folder, which are gone once it is in the Trash
+        meta = scanner.probe(src)
+        game, kind, start, _ = scanner.parse_name(src, meta["duration"])
     shutil.move(str(src), str(dst))
-    if clip_id:
-        db.update(clip_id, path=str(dst), prev_path=str(src), prev_status=status_from,
-                  status="trash", trashed_at=time.time(), note=note)
-        return clip_id
-    meta = scanner.probe(dst)
-    game, kind, start, _ = scanner.parse_name(src, meta["duration"])
-    return db.x("INSERT INTO clips(path, game, kind, start_ts, size, mtime, duration, vcodec, status, "
-                "prev_path, prev_status, trashed_at, note, analyzed) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
-                (str(dst), game, kind, start, dst.stat().st_size, dst.stat().st_mtime, meta["duration"],
-                 meta["vcodec"], "trash", str(src), status_from, time.time(), note))
+    try:
+        if clip_id:
+            db.update(clip_id, path=str(dst), prev_path=str(src), prev_status=status_from,
+                      status="trash", trashed_at=time.time(), note=note)
+            return clip_id
+        return db.x("INSERT INTO clips(path, game, kind, start_ts, size, mtime, duration, vcodec, status, "
+                    "prev_path, prev_status, trashed_at, note, analyzed) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+                    (str(dst), game, kind, start, dst.stat().st_size, dst.stat().st_mtime, meta["duration"],
+                     meta["vcodec"], "trash", str(src), status_from, time.time(), note))
+    except Exception:
+        shutil.move(str(dst), str(src))   # not recorded: put it back rather than leave an unknown file in Trash
+        raise
+
+
+def _swap(src, new, note):
+    """Put a checked new file (trimmed/compressed) in place of a kept clip; the original goes to Trash.
+    If any step fails, the original is put back where it was."""
+    tid = to_trash(src, note=note, status_from="keep")
+    try:
+        os.replace(new, src)
+    except Exception:
+        shutil.move(db.clip(tid)["path"], str(src))
+        db.x("DELETE FROM clips WHERE id=?", (tid,))
+        raise
 
 
 def trash(cid):
@@ -101,13 +120,29 @@ def restore(cid):
     db.update(cid, **fields)
 
 
+def _still_needed(c):
+    """An original in the Trash is the only copy of a kept clip when its replacement never landed.
+    Such a file is never deleted by 'Empty trash' (it stays, and can be restored)."""
+    replaced = (c["note"] or "").startswith("original, replaced")   # set by _swap; joins and deletes are not
+    if replaced and c["prev_path"] and not os.path.exists(c["prev_path"]):
+        return True
+    name = Path(c["path"]).name
+    for k in db.q("SELECT path FROM clips WHERE status='keep' AND path LIKE ?", ("%" + name,)):
+        if Path(k["path"]).name == name and not os.path.exists(k["path"]):
+            return True
+    return False
+
+
 def empty_trash():
     """Deletes what is really in the Trash folder. A clip marked for Trash but still in its undo window
     is not in the folder yet, and is left alone. A locked file is skipped and reported, not fatal."""
     freed, locked = 0, []
     trash_dir = os.path.normcase(str(Path(CFG["trash"]).resolve()))
-    for c in db.q("SELECT id, path, size FROM clips WHERE status='trash' AND busy=0 AND trashed_at IS NOT NULL"):
+    for c in db.q("SELECT id, path, size, prev_path, note FROM clips "
+                  "WHERE status='trash' AND busy=0 AND trashed_at IS NOT NULL"):
         if not os.path.normcase(str(Path(c["path"]).resolve())).startswith(trash_dir):
+            continue
+        if _still_needed(c):
             continue
         try:
             os.remove(c["path"])
@@ -143,11 +178,9 @@ def trim(cid, start, end):
              "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", str(tmp)])
     _check_duration(tmp, end - start, tol=1.5)
     _copy_times(src, tmp)
-    to_trash(src, note="original, replaced by the trimmed version", status_from="keep")
-    final = src  # same name and place as before
-    os.replace(tmp, final)
+    _swap(src, tmp, "original, replaced by the trimmed version")   # same name and place as before
     db.update(cid, trimmed=1, orig_size=c["orig_size"] or c["size"], keep_start=None, keep_end=None)
-    scanner.index_file(final)
+    scanner.index_file(src)
 
 
 def compress(cid):
@@ -184,8 +217,7 @@ def compress(cid):
         db.update(cid, note=f"Not compressed: it is already compact (HEVC would save only {max(saved, 0):.0%})")
         return None
     _copy_times(src, tmp)
-    to_trash(src, note=f"original, replaced by the compressed version (quality {score:.1f}/100)", status_from="keep")
-    os.replace(tmp, src)
+    _swap(src, tmp, f"original, replaced by the compressed version (quality {score:.1f}/100)")
     db.update(cid, compressed=1, orig_size=c["orig_size"] or c["size"])
     scanner.index_file(src)
     return score
@@ -222,6 +254,7 @@ def rename(cid, title):
     dst = _free(src.with_name(name))
     os.rename(src, dst)
     db.update(cid, path=str(dst), title=clean or None)
+    db.x("UPDATE clips SET prev_path=? WHERE status='trash' AND prev_path=?", (str(dst), str(src)))
 
 
 # ---------- continuations ----------

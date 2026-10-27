@@ -155,6 +155,105 @@ def test_library_safety():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_kept_clip_is_never_lost():
+    """A kept clip must survive every failure on the way: some clips lost their only copy when a step
+    after 'original to Trash' failed, the startup cleanup removed the compressed copy, and the Trash was
+    emptied. Names that don't follow NVIDIA's pattern (Windows trims) triggered the failing step."""
+    tmp = Path(tempfile.mkdtemp(prefix="clipbuddy-keep-"))
+    try:
+        game = tmp / "clips" / "Test Game"
+        _clip(game, "Test Game 2026.01.18 - 20.00.00.01.DVR-00.00.01.000-00.00.07.000.mp4", 6)
+        _clip(game, "Test Game 2026.01.18 - 21.00.00.02.DVR.mp4", 6)
+        _clip(game, "Test Game 2026.01.18 - 22.00.00.03.DVR.mp4", 6)
+        _clip(game, "Test Game 2026.01.18 - 23.00.00.04.DVR.mp4", 6)
+
+        _run(tmp, "data", """
+            import os, shutil
+            run_jobs()
+            server.CFG.update(grace_seconds=0, encoder="x265", vmaf_min=0)
+            ids = {Path(c["path"]).name[23:25]: c["id"] for c in db.q("SELECT id, path FROM clips")}
+
+            # 1. a trimmed-by-Windows name: keep + compress completes, the original waits in Trash
+            actions.keep(ids["20"], do_compress=True)
+            k = db.clip(ids["20"])
+            orig = db.one("SELECT * FROM clips WHERE status='trash' AND prev_path=?", (k["path"],))
+            check(Path(k["path"]).exists() and k["compressed"] == 1 and orig and Path(orig["path"]).exists(),
+                  "odd file name: kept, compressed, original recorded in Trash")
+
+            # 2. the swap fails half way: the original goes back where it was
+            actions.keep(ids["21"], do_compress=False)
+            k = db.clip(ids["21"]); before = Path(k["path"]).stat().st_size
+            real = os.replace
+            def broken(a, b): raise OSError("disk full")
+            actions.os.replace = broken
+            try:
+                actions.compress(ids["21"])
+            except OSError:
+                pass
+            actions.os.replace = real
+            check(Path(k["path"]).exists() and Path(k["path"]).stat().st_size == before
+                  and not db.one("SELECT id FROM clips WHERE prev_path=?", (k["path"],)),
+                  "failed swap: the original is back in Keepers, nothing left in Trash")
+
+            # 3. the app closed between 'original to Trash' and 'new file in place': startup finishes it
+            actions.keep(ids["22"], do_compress=False)
+            p = Path(db.clip(ids["22"])["path"]); new = p.with_name(p.stem + ".cb-hevc.mp4")
+            shutil.copy2(p, new)
+            actions.to_trash(p, note="original, replaced by the compressed version", status_from="keep")
+            worker._remove_leftovers()
+            check(p.exists() and not new.exists(), "startup puts a finished copy in place instead of deleting it")
+
+            # 4. Empty trash keeps an original whose kept copy is missing
+            actions.keep(ids["23"], do_compress=False)
+            p = Path(db.clip(ids["23"])["path"])
+            tid = actions.to_trash(p, note="original, replaced by the compressed version", status_from="keep")
+            actions.empty_trash()
+            check(db.clip(tid) and Path(db.clip(tid)["path"]).exists(),
+                  "empty trash never deletes the only copy of a kept clip")
+            check(not Path(orig["path"]).exists(), "...but does delete an original whose copy is safe")
+        """)
+
+        _run(tmp, "data", """
+            # 5. a job moves a clip while the folder walk is under way: its record must not be dropped
+            run_jobs()
+            c = db.q("SELECT * FROM clips WHERE path LIKE ? ORDER BY id", ("%Keepers%",))[0]
+            src = Path(c["path"]); moved = src.with_name("moved.mp4")
+            real = scanner.walk
+            def walk_while_moving():
+                for i, p in enumerate(real()):
+                    if i == 0:
+                        src.rename(moved); db.update(c["id"], path=str(moved))
+                    yield p
+            scanner.walk = walk_while_moving
+            scanner._walk_pending()
+            check(db.clip(c["id"]) is not None, "a clip moved during the walk keeps its record")
+        """)
+
+        _run(tmp, "data", """
+            # 6. a library left broken by the old bug is repaired on the first start of the update
+            import shutil
+            trash = Path(server.CFG["trash"])
+            kept = [Path(c["path"]) for c in db.q("SELECT path FROM clips WHERE path LIKE ? ORDER BY id", ("%Keepers%",))]
+            a, b = kept[0], kept[1]
+            shutil.copy2(a, a.with_name(a.stem + ".cb-hevc.mp4"))     # compressed copy left behind,
+            a.rename(trash / a.name)                                  # original in Trash with no record
+            b.rename(trash / b.name)                                  # compressed copy already cleaned up
+            db.x("DELETE FROM clips WHERE path IN (?, ?)", (str(a), str(b)))
+            db.add_job(None, "keep")
+            db.x("UPDATE jobs SET state='error', error=? WHERE id=(SELECT max(id) FROM jobs)",
+                 (str(FileNotFoundError(2, "The system cannot find the file specified", str(b))),))
+            run_jobs()   # the scan takes the Trash files in as 'found in the Trash folder'
+            worker._remove_leftovers(); worker._repair_failed_keeps()
+            check(a.exists() and db.one("SELECT prev_status FROM clips WHERE path=?", (str(trash / a.name),))["prev_status"] == "keep",
+                  "left-behind copy put in place, its original marked as a kept clip's original")
+            check(b.exists() and not (trash / b.name).exists() and db.one("SELECT status FROM clips WHERE path=?", (str(b),))["status"] == "keep",
+                  "failed keep: the original is moved back to Keepers as kept")
+        """)
+        print("all checks passed")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_api_only_answers_this_pc():
     """Another website must not be able to change anything (for example empty the Trash)."""
     import urllib.error
