@@ -232,7 +232,9 @@ def keep(cid, start=None, end=None, do_compress=None):
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dst))
         db.update(cid, path=str(dst))
-    if start is not None and end is not None and (start > 0.6 or end < c["duration"] - 0.6):
+    # a job cut off after its trim runs again at the next start: don't cut the already-trimmed clip again
+    done = c["trimmed"] and start is not None and end is not None and abs(c["duration"] - (end - start)) < 1.5
+    if not done and start is not None and end is not None and (start > 0.6 or end < c["duration"] - 0.6):
         trim(cid, start, end)
     if CFG["compress_keepers"] if do_compress is None else do_compress:
         try:

@@ -8,6 +8,7 @@ Fixes a bug that could lose kept clips. **Update now**, and don't empty the Tras
 - **Repair on first start:** clips already caught by this bug are put back. If the compressed copy is still there it takes its place; otherwise the original is moved from the Trash back to Keepers and compressed again. Nothing is repaired once the Trash has been emptied.
 - **Kept clips are now protected at every step.** If replacing a clip with its trimmed or compressed version fails at any point, the original is put back where it was. A finished copy left by an interrupted job is put in place at start instead of being deleted. Empty trash never deletes an original whose kept version is missing.
 - **Fixed:** a clip moved by a job while the folder was being read could lose its record (its rating, tags and title).
+- **Fixed:** a keep that was cut off by closing the app no longer tries to trim the clip a second time when it runs again.
 
 ## 0.1.4
 

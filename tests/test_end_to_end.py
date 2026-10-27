@@ -108,6 +108,9 @@ def test_end_to_end():
     check(k["compressed"] == 1 and k["vcodec"] == "hevc", f"compressed to HEVC with {encoders.label()}")
     check("big moment" in Path(k["path"]).name and k["rating"] == 5, "title renamed the file, rating stored")
     check(db.one("SELECT COUNT(*) n FROM clips WHERE status='trash'")["n"] == 2, "both replaced originals are in Trash")
+    from clipbuddy import actions
+    actions.keep(cb["id"], cb["sug_start"], cb["sug_end"], do_compress=False)   # the job re-run after a restart
+    check(abs(db.clip(cb["id"])["duration"] - k["duration"]) < 0.1, "a re-run keep doesn't trim the clip twice")
 
     # delete + undo inside the grace period
     actions_cfg = server.CFG
