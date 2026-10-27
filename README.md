@@ -46,7 +46,9 @@ Everything runs locally. Nothing is uploaded, and nothing is deleted until you e
 
 Nothing else to install: ffmpeg is included. Clip Buddy opens in your browser and asks where your clips are. NVIDIA's default folder, `Videos\NVIDIA`, is detected automatically.
 
-Windows may show "Windows protected your PC" the first time, because the exe is not code-signed: click **More info**, then **Run anyway**. To update, close Clip Buddy and unzip the new version over the old folder; your settings and library stay.
+Windows may show "Windows protected your PC" the first time, because the exe is not code-signed: click **More info**, then **Run anyway**.
+
+**To update:** close Clip Buddy, then unzip the new version over the old folder. If you unzip it somewhere new instead, copy the `data` folder and `config.json` from the old folder into the new one before starting it: they hold your decisions. Your clips themselves stay where they are either way.
 
 ### From source with `ClipBuddy.bat`
 
@@ -107,7 +109,7 @@ Your choices are saved in `config.json` next to the app. Optional keys:
 
 **Does it work without an NVIDIA card?** Yes. Compression uses AMD or Intel hardware encoders when available, and the CPU otherwise. With the Windows download, NVIDIA's encoder needs driver 570 or newer. CPU encoding is slower (minutes per clip) at the same quality. The Space tab shows which encoder is in use.
 
-**Other recorders (AMD ReLive, OBS, Steam)?** Any folder of `.mp4` files works. The end-of-clip weighting and the file-name parsing are tuned for NVIDIA's `Game YYYY.MM.DD - HH.MM.SS.xx.DVR.mp4` names. Other names fall back to the file's date and folder name.
+**Other recorders (AMD ReLive, OBS, Xbox Game Bar, Steam, Medal)?** Yes. Any folder of `.mp4`, `.mkv` or `.mov` files works. The game, the time and whether a file is a replay are read from any name style (see [how it works](docs/how-it-works.md#reading-any-recorders-files)), and setup suggests the usual folders of each recorder.
 
 **macOS / Linux?** The Python app is cross-platform, but only Windows is tested so far. Use the pip install.
 

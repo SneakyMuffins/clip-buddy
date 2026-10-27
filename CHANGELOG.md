@@ -2,13 +2,39 @@
 
 ## 0.1.5
 
-Fixes a bug that could lose kept clips. **Update now**, and don't empty the Trash until the update has started once.
+Fixes bugs that could lose kept clips. **Update now.** Until the update has started once, don't empty the Trash.
 
-- **Fixed: keeping a clip with a non-standard file name could leave its only copy in the Trash.** Affected names don't follow NVIDIA's pattern, for example clips cut with the Windows Photos trimmer (`... .DVR-00.04.06.082-00.04.59.430.mp4`). The original went to the Trash, then a later step failed. The smaller compressed copy was then cleaned up at the next start, so emptying the Trash deleted the clip for good.
-- **Repair on first start:** clips already caught by this bug are put back. If the compressed copy is still there it takes its place; otherwise the original is moved from the Trash back to Keepers and compressed again. Nothing is repaired once the Trash has been emptied.
-- **Kept clips are now protected at every step.** If replacing a clip with its trimmed or compressed version fails at any point, the original is put back where it was. A finished copy left by an interrupted job is put in place at start instead of being deleted. Empty trash never deletes an original whose kept version is missing.
-- **Fixed:** a clip moved by a job while the folder was being read could lose its record (its rating, tags and title).
-- **Fixed:** a keep that was cut off by closing the app no longer tries to trim the clip a second time when it runs again.
+**How to update:** close Clip Buddy and unzip the new version over the old folder. If you unzip it somewhere new, copy the `data` folder and `config.json` from the old folder into the new one first: they hold your decisions, and the repair below needs them.
+
+### Kept clips that went missing
+
+- **Fixed: keeping a clip could leave its only copy in the Trash.** It happened to every clip whose name doesn't follow NVIDIA's pattern: all AMD ReLive clips, and clips trimmed in other apps (`... .DVR-00.04.06.082-00.04.59.430.mp4`). The original went to the Trash, a later step failed, the compressed copy was cleaned up at the next start, and emptying the Trash then deleted the clip for good.
+- **Repair on first start.** Clips caught by this bug go back to Keepers as kept, with the range you chose cut again, your title, and compressed again. This also works for game folders with an apostrophe (Baldur's Gate 3, Tom Clancy's...). Nothing can be repaired once the Trash has been emptied.
+- **Empty trash only deletes what you deleted.** It keeps any Trash file it has no record of (it may be a kept clip, for example after using another copy of the app) and the original of a kept clip whose new version is missing. The Trash screen marks them. Files of unknown origin can be restored, or deleted with their own hold-to-confirm button.
+
+### Nothing destroys a clip when something fails
+
+- Every step can run again after the app was closed in the middle of it: a move is never made twice, a clip is never trimmed twice, and a finished trimmed or compressed copy is put in place instead of deleted.
+- **Fixed:** deleting or compressing a clip that was open in another program (a player, Explorer's preview, or Clip Buddy's own player) left a full copy in the Trash and the clip stuck. Moves now wait and retry, and if they still can't, nothing changes and the job tries again a minute later.
+- **Fixed:** an Undo could say "Undone" while the delete still ran. Undo now only reports what it really stopped.
+- **Fixed:** a rename (title) could run while the same clip was being compressed, and the title was lost. One job per clip at a time.
+- **Fixed:** deleting a clip from a bulk action while its keep was pending could put a deleted clip in Keepers.
+- **Fixed:** a drive or folder that was briefly away (asleep, unplugged, renamed) wiped every decision, rating and tag of its clips.
+- **Fixed:** joining clips saved in different formats, or already-compressed clips, could make a broken file or drop the audio, and the parts went to the Trash anyway. Joins now check the tracks of every part, the full length of every track, and that the result plays cleanly where the clips meet, before any part moves.
+- **Fixed:** joins failed for games with an apostrophe in the path, a join cut off half way left a duplicate, and joining a kept clip left the result outside Keepers.
+- **Fixed:** startup cleanup deleted any of your own files with `.cb-` in the name. It only touches the exact temp files Clip Buddy writes.
+- **Fixed:** starting a second copy (for example the new version while the old one was open) could reset and repeat the running copy's jobs. Only one copy runs now, and a different version says so instead of opening the old one.
+- **Fixed:** after changing the clips folder, the old Trash could never be emptied.
+- Every file change (move, replace, delete) is written to `data\history.jsonl`.
+
+### Any recorder, not just NVIDIA
+
+- File names from any recorder are read: AMD ReLive, OBS, Xbox Game Bar, Steam, Medal and others. The game, the time and whether it is a replay come from the name, with the file's own time for accuracy. Before, other names lost the game (it became the folder name), the time and the replay weighting, and back-to-back clips weren't found.
+- `.mkv` and `.mov` files are included (OBS records `.mkv` by default).
+- Setup suggests the default folders of AMD, Xbox Game Bar, Medal, Outplayed and SteelSeries too.
+- **Fixed:** keeping a range of a clip with keyframes far apart (OBS, most HEVC) always failed.
+- **Fixed:** compressing a variable-frame-rate clip failed with "quality check failed to run".
+- Clips that are already HEVC or AV1 say why they weren't compressed.
 
 ## 0.1.4
 

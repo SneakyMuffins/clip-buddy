@@ -174,14 +174,14 @@ def test_kept_clip_is_never_lost():
             ids = {Path(c["path"]).name[23:25]: c["id"] for c in db.q("SELECT id, path FROM clips")}
 
             # 1. a trimmed-by-Windows name: keep + compress completes, the original waits in Trash
-            actions.keep(ids["20"], do_compress=True)
+            db.update(ids["20"], status="keep"); actions.keep(ids["20"], do_compress=True)
             k = db.clip(ids["20"])
             orig = db.one("SELECT * FROM clips WHERE status='trash' AND prev_path=?", (k["path"],))
             check(Path(k["path"]).exists() and k["compressed"] == 1 and orig and Path(orig["path"]).exists(),
                   "odd file name: kept, compressed, original recorded in Trash")
 
             # 2. the swap fails half way: the original goes back where it was
-            actions.keep(ids["21"], do_compress=False)
+            db.update(ids["21"], status="keep"); actions.keep(ids["21"], do_compress=False)
             k = db.clip(ids["21"]); before = Path(k["path"]).stat().st_size
             real = os.replace
             def broken(a, b): raise OSError("disk full")
@@ -196,7 +196,7 @@ def test_kept_clip_is_never_lost():
                   "failed swap: the original is back in Keepers, nothing left in Trash")
 
             # 3. the app closed between 'original to Trash' and 'new file in place': startup finishes it
-            actions.keep(ids["22"], do_compress=False)
+            db.update(ids["22"], status="keep"); actions.keep(ids["22"], do_compress=False)
             p = Path(db.clip(ids["22"])["path"]); new = p.with_name(p.stem + ".cb-hevc.mp4")
             shutil.copy2(p, new)
             actions.to_trash(p, note="original, replaced by the compressed version", status_from="keep")
@@ -204,7 +204,7 @@ def test_kept_clip_is_never_lost():
             check(p.exists() and not new.exists(), "startup puts a finished copy in place instead of deleting it")
 
             # 4. Empty trash keeps an original whose kept copy is missing
-            actions.keep(ids["23"], do_compress=False)
+            db.update(ids["23"], status="keep"); actions.keep(ids["23"], do_compress=False)
             p = Path(db.clip(ids["23"])["path"])
             tid = actions.to_trash(p, note="original, replaced by the compressed version", status_from="keep")
             actions.empty_trash()
@@ -230,24 +230,58 @@ def test_kept_clip_is_never_lost():
         """)
 
         _run(tmp, "data", """
-            # 6. a library left broken by the old bug is repaired on the first start of the update
-            import shutil
+            # 6. a library left broken by the old bug is repaired on the first start of the update. 0.1.4 left
+            # the kept original unrecorded in Trash and an error naming the kept path; a path with ' in it is
+            # quoted with double quotes in that error.
+            import json, shutil
             trash = Path(server.CFG["trash"])
             kept = [Path(c["path"]) for c in db.q("SELECT path FROM clips WHERE path LIKE ? ORDER BY id", ("%Keepers%",))]
             a, b = kept[0], kept[1]
+            b_kept = Path(server.CFG["keepers"]) / "Baldur's Gate 3" / b.name
             shutil.copy2(a, a.with_name(a.stem + ".cb-hevc.mp4"))     # compressed copy left behind,
             a.rename(trash / a.name)                                  # original in Trash with no record
             b.rename(trash / b.name)                                  # compressed copy already cleaned up
             db.x("DELETE FROM clips WHERE path IN (?, ?)", (str(a), str(b)))
-            db.add_job(None, "keep")
-            db.x("UPDATE jobs SET state='error', error=? WHERE id=(SELECT max(id) FROM jobs)",
-                 (str(FileNotFoundError(2, "The system cannot find the file specified", str(b))),))
+            for path, rng in ((a, {}), (b_kept, {"start": 1.0, "end": 4.0})):
+                db.add_job(None, "keep", rng)
+                db.x("UPDATE jobs SET state='error', error=? WHERE id=(SELECT max(id) FROM jobs)",
+                     (str(FileNotFoundError(None, "The system cannot find the file specified", str(path), 2)),))
             run_jobs()   # the scan takes the Trash files in as 'found in the Trash folder'
+            check(actions.protected(db.one("SELECT * FROM clips WHERE path=?", (str(trash / b.name),))) == "unknown",
+                  "before the repair: an unrecorded Trash file is protected from Empty trash")
             worker._remove_leftovers(); worker._repair_failed_keeps()
             check(a.exists() and db.one("SELECT prev_status FROM clips WHERE path=?", (str(trash / a.name),))["prev_status"] == "keep",
                   "left-behind copy put in place, its original marked as a kept clip's original")
-            check(b.exists() and not (trash / b.name).exists() and db.one("SELECT status FROM clips WHERE path=?", (str(b),))["status"] == "keep",
-                  "failed keep: the original is moved back to Keepers as kept")
+            check(b_kept.exists() and not (trash / b.name).exists()
+                  and db.one("SELECT status FROM clips WHERE path=?", (str(b_kept),))["status"] == "keep",
+                  "failed keep (apostrophe in the path): the original is moved back to Keepers as kept")
+            server.CFG["compress_keepers"] = False
+            run_jobs()
+            d = db.one("SELECT duration FROM clips WHERE path=?", (str(b_kept),))["duration"]
+            check(2.5 < d < 4.5, f"...and the range the user chose is cut again ({d:.1f}s of 6s)")
+
+            # 7. a user's own file with .cb- in its name is never touched by the startup cleanup
+            mine = a.with_name("my.cb-edit.mp4"); shutil.copy2(a, mine)
+            worker._remove_leftovers()
+            check(mine.exists(), "startup cleanup leaves files it did not write alone")
+
+            # 8. the folder is away for a moment (drive asleep): no record is dropped
+            root = Path(server.CFG["keepers"]); away = root.with_name("Keepers-away")
+            before = db.one("SELECT COUNT(*) n FROM clips")["n"]
+            root.rename(away); scanner._queue.clear(); scanner._walk_pending(); away.rename(root)
+            check(db.one("SELECT COUNT(*) n FROM clips")["n"] == before, "a folder that is away keeps all its records")
+
+            # 9. a file of unknown origin is deleted only when asked for separately
+            stray = trash / "Some Game_replay_2025.03.29-01.08_clip_1.mp4"; shutil.copy2(a, stray)
+            scanner._queue.clear(); worker.state["last_scan"] = 0; run_jobs()
+            check(db.one("SELECT note FROM clips WHERE path=?", (str(stray),))["note"] == "found in the Trash folder",
+                  "a file put in the Trash by something else is taken in as unknown")
+            actions.empty_trash()
+            check(stray.exists(), "Empty trash leaves a file of unknown origin")
+            actions.empty_trash(unknown=True)
+            check(not stray.exists(), "...and deletes it when asked for separately")
+            check(any(json.loads(line)["event"] == "delete" for line in open(actions.HISTORY, encoding="utf-8")),
+                  "every delete is written to the history file")
         """)
         print("all checks passed")
     finally:

@@ -10,10 +10,22 @@ from pathlib import Path
 from . import db
 from .config import CFG, ROOT
 
-# "<Game> 2026.01.18 - 20.48.30.06.DVR.mp4", optionally " - <title>" before .mp4 (our renames)
-NAME_RE = re.compile(
-    r"^(?P<game>.+?) (?P<date>\d{4}\.\d\d\.\d\d) - (?P<time>\d\d\.\d\d\.\d\d)(?:\.\d\d)?"
-    r"(?P<dvr>\.DVR)?(?: \((?:joined )?\d+\))?(?: - (?P<title>.+?))?\.mp4$", re.I)
+VIDEO_EXT = (".mp4", ".mkv", ".mov")
+# temp files Clip Buddy writes while working; nothing else is ever treated as one
+TEMP_RE = re.compile(r"^(?:(?P<base>.+)\.cb-(?P<kind>hevc|trim)(?P<ext>\.(?:mp4|mkv|mov))|\.cb-merged\.(?:mp4|mkv|mov)|\.cb-concat\.txt)$", re.I)
+
+# Any capture tool: a date and a time anywhere in the name, with any separators. NVIDIA "2026.01.18 - 20.48.30",
+# AMD "2025.03.29-01.08", OBS / Game Bar "2024-10-27 21-33-11", "20241027_213311", "2024-10-27T21:33:11".
+DATE_RE = re.compile(
+    r"(?<!\d)(?P<y>20\d\d)[._-]?(?P<mo>[01]\d)[._-]?(?P<d>[0-3]\d)"
+    r"(?:\s*-\s*|[ _.T]+)?"
+    r"(?P<h>[0-2]\d)[._:-]?(?P<mi>[0-5]\d)(?:[._:-]?(?P<s>[0-5]\d))?(?!\d)")
+REPLAY_RE = re.compile(r"replay|(?<![a-z])dvr(?![a-z])|instant|clip|highlight|moment", re.I)
+# capture-tool words next to the game name: "Delta Force Hawk Ops_replay_" -> "Delta Force Hawk Ops"
+NOISE_RE = re.compile(r"(?:(?:^|[\s._-])(?:replay|record(?:ing)?|clip|instant|dvr|capture|highlight)s?|[\s._-])+$", re.I)
+# folders that hold clips of many games: never a game name
+GENERIC_DIRS = {"videos", "nvidia", "radeon relive", "captures", "keepers", "trash", "clips", "recordings",
+                "obs", "medal", "outplayed", "clip buddy library", "restored"}
 
 NOWIN = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 # ffmpeg/ffprobe: the copy bundled in "ffmpeg\" next to the app (the Windows download) first, then PATH.
@@ -26,34 +38,79 @@ def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, creationflags=NOWIN, **kw)
 
 
+def _rate(r):
+    num, _, den = (r or "0/1").partition("/")
+    try:
+        return float(num) / float(den or 1) if float(num) else None
+    except ValueError:
+        return None
+
+
 def probe(path):
     r = run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)])
     info = json.loads(r.stdout or b"{}")
     v = next((s for s in info.get("streams", []) if s.get("codec_type") == "video"), {})
-    num, _, den = v.get("r_frame_rate", "0/1").partition("/")
     fmt = info.get("format", {})
+    fps = _rate(v.get("r_frame_rate"))
     return {
         "duration": float(fmt.get("duration") or 0),
         "bitrate": int(fmt.get("bit_rate") or 0),
         "width": v.get("width"), "height": v.get("height"),
-        "fps": round(float(num) / float(den or 1), 2) if num else None,
+        "fps": round(fps, 2) if fps else None,
         "vcodec": v.get("codec_name"),
     }
 
 
-def parse_name(path, duration):
-    """Game, kind and clip start time. Replay file names carry the save (= end) time,
-    manual recordings carry the start time."""
+def streams(path):
+    """What a lossless join needs to match: every stream's type, codec and layout, plus the true average
+    frame rate (variable-frame-rate captures run well below their nominal rate)."""
+    r = run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", str(path)])
+    out = []
+    for s in json.loads(r.stdout or b"{}").get("streams", []):
+        if s.get("codec_type") not in ("video", "audio"):
+            continue
+        out.append({k: s.get(k) for k in ("codec_type", "codec_name", "width", "height", "pix_fmt",
+                                          "sample_rate", "channels")} | {"duration": float(s.get("duration") or 0),
+                                                                         "avg_fps": _rate(s.get("avg_frame_rate"))})
+    return out
+
+
+def parse_name(path, duration, mtime=None):
+    """Game, kind, start time and title of a clip, from its name, folder and file time. Never raises.
+    A replay's name carries the save (= end) time, a recording's its start time. The file's modified time
+    (written when saving finished, to the second) is used when it agrees with the name."""
     p = Path(path)
-    m = NAME_RE.match(p.name)
+    if mtime is None:
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            mtime = None
+    stem = p.stem
+    kind = "replay" if REPLAY_RE.search(stem) else "recording"
+    m, when = DATE_RE.search(stem), None
     if m:
-        t = datetime.strptime(m["date"] + " " + m["time"], "%Y.%m.%d %H.%M.%S").timestamp()
-        kind = "replay" if m["dvr"] else "recording"
-        start = t - duration if kind == "replay" else t
-        return m["game"], kind, start, m["title"]
-    mt = p.stat().st_mtime
-    game = p.parent.name if p.parent.name.lower() not in ("keepers", "nvidia") else "Other"
-    return game, "recording", mt - duration, None
+        try:
+            when = datetime(int(m["y"]), int(m["mo"]), int(m["d"]), int(m["h"]), int(m["mi"]),
+                            int(m["s"] or 0)).timestamp()
+        except (ValueError, OverflowError, OSError):
+            m = None
+    game = NOISE_RE.sub("", stem[:m.start()]).strip(" _.-") if m else ""
+    if not game:
+        folder = p.parent.name
+        game = folder if folder and folder.lower() not in GENERIC_DIRS else "Other"
+    title = None
+    if m:
+        t = re.search(r" - (.+)$", stem[m.end():])
+        title = t[1].strip() if t else None
+    end = None
+    if when is not None:
+        end = when if kind == "replay" else when + duration
+        if mtime is not None and abs(mtime - end) <= (90 if m["s"] else 150):
+            end = mtime
+    elif mtime is not None:
+        end = mtime
+    start = (end if end is not None else time.time()) - duration
+    return game, kind, start, title
 
 
 def roots():
@@ -69,7 +126,7 @@ def walk():
             dirs[:] = [d for d in dirs if d != "Clip Buddy Library"
                        and not (CFG["trash"] and os.path.normcase(os.path.join(dirpath, d)) == os.path.normcase(CFG["trash"]))]
             for f in files:
-                if f.lower().endswith(".mp4") and ".cb-" not in f:
+                if f.lower().endswith(VIDEO_EXT) and not TEMP_RE.match(f):
                     yield Path(dirpath) / f
 
 
@@ -77,7 +134,7 @@ def index_file(path, **extra):
     """Probe one file and insert/refresh its row. Returns the clip id."""
     st = path.stat()
     meta = probe(path)
-    game, kind, start, title = parse_name(path, meta["duration"])
+    game, kind, start, title = parse_name(path, meta["duration"], st.st_mtime)
     row = db.one("SELECT id, title FROM clips WHERE path=?", (str(path),))
     fields = dict(game=game, kind=kind, start_ts=start, size=st.st_size, mtime=st.st_mtime, **meta)
     if row:
@@ -120,17 +177,23 @@ def _walk_pending():
     trash = Path(CFG["trash"]) if CFG["trash"] else None
     if trash and trash.is_dir():
         for f in trash.iterdir():
-            if f.suffix.lower() == ".mp4" and ".cb-" not in f.name and str(f) not in known:
+            if f.suffix.lower() in VIDEO_EXT and not TEMP_RE.match(f.name) and str(f) not in known:
                 try:
                     pending.append((f, f.stat()))
                 except OSError:
                     pass
+    # Drop records whose file is gone, but only where we can see: a folder that is away (a drive asleep or
+    # unplugged, a renamed folder) says nothing about its files. A clip with a job waiting is left alone too:
+    # the job knows where the file went.
+    live = [r for r in (*roots(), trash) if r and r.is_dir()]
+    with_jobs = {r["clip_id"] for r in db.q("SELECT clip_id FROM jobs WHERE state IN ('pending','running')")}
     for sp, r in known.items():
-        if sp not in seen and not os.path.exists(sp):
-            # the list above is from the start of the walk: a job may have moved the clip since then
-            now = db.one("SELECT path, busy FROM clips WHERE id=?", (r["id"],))
-            if now and now["path"] == sp and not now["busy"] and not os.path.exists(sp):
-                db.x("DELETE FROM clips WHERE id=?", (r["id"],))
+        if sp in seen or os.path.exists(sp) or r["id"] in with_jobs or not any(_inside(sp, f) for f in live):
+            continue
+        # the list above is from the start of the walk: a job may have moved the clip since then
+        now = db.one("SELECT path, busy FROM clips WHERE id=?", (r["id"],))
+        if now and now["path"] == sp and not now["busy"] and not os.path.exists(sp):
+            db.x("DELETE FROM clips WHERE id=?", (r["id"],))
     return pending
 
 

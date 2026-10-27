@@ -92,7 +92,7 @@ const App = {
     })).sort((a, b) => a.start_ts - b.start_ts);
     this.byId = Object.fromEntries(this.clips.map(c => [c.id, c]));
     this.chains = chains;
-    this.trash = trash.map(t => ({ id: t.id, file: t.name, note: t.note || 'deleted', size: t.size, when: t.trashed_at, clip_id: t.id, pending: !t.trashed_at }));
+    this.trash = trash.map(t => ({ id: t.id, file: t.name, note: t.note || 'deleted', size: t.size, when: t.trashed_at, clip_id: t.id, pending: !t.trashed_at, protected: t.protected }));
     this.group();
   },
   async refreshStats() {
@@ -268,9 +268,9 @@ const App = {
     await api('/api/bulk', { action: 'restore', ids: [+tid] });
     this.toast('Restoring…', 'keep');
   },
-  async emptyTrash() {
-    const bytes = this.trash.reduce((s, t) => s + t.size, 0);
-    await api('/api/trash/empty', {});
+  async emptyTrash(unknown = false) {
+    const bytes = this.trash.filter(t => !t.pending && (unknown ? t.protected === 'unknown' : !t.protected)).reduce((s, t) => s + t.size, 0);
+    await api('/api/trash/empty', { unknown });
     this.undoStack = this.undoStack.filter(u => u.type === 'skip');
     this.toast(`Deleting for good · ${F.size(bytes)}`, 'trash');
   },
@@ -750,27 +750,39 @@ function renderSpace() {
 }
 
 /* ================= trash ================= */
+const WHY = {
+  unknown: 'origin unknown · may be a kept clip. Restore it, or delete it below',
+  needed: 'the only copy of a kept clip · kept safe',
+};
 function renderTrash() {
-  const items = App.trash, moved = items.filter(t => !t.pending), b = totalOf(moved);
+  const items = App.trash, moved = items.filter(t => !t.pending), gone = moved.filter(t => !t.protected), b = totalOf(gone);
+  const unknown = moved.filter(t => t.protected === 'unknown'), safe = moved.filter(t => t.protected === 'needed');
   const folder = App.summary.settings?.trash;
   $('#trashSub').textContent = (items.length ? `${F.plural(moved.length, 'file')} · ${F.size(b)} · still on disk until you empty it` : '')
     + (folder ? `${items.length ? ' · ' : ''}folder: ${folder}` : '');
   $('#trashList').innerHTML = items.length ? `<table><thead><tr><th>File</th><th>Why it's here</th><th class="th-r">Size</th><th>When</th><th></th></tr></thead><tbody>
-    ${items.map(t => `<tr><td class="file">${esc(t.file)}</td><td class="note ${t.note === 'deleted' ? 'deleted' : ''}">${esc(t.note)}</td><td class="num">${F.size(t.size)}</td><td class="when">${t.pending ? 'in a moment' : F.ago(t.when)}</td><td class="act">${t.pending ? '<span class="trash-pending">U to undo</span>' : `<button class="btn" data-restore="${t.id}">Restore</button>`}</td></tr>`).join('')}</tbody></table>`
+    ${items.map(t => `<tr><td class="file">${esc(t.file)}</td><td class="note ${t.note === 'deleted' ? 'deleted' : ''} ${t.protected ? 'protected' : ''}">${esc(WHY[t.protected] || t.note)}</td><td class="num">${F.size(t.size)}</td><td class="when">${t.pending ? 'in a moment' : F.ago(t.when)}</td><td class="act">${t.pending ? '<span class="trash-pending">U to undo</span>' : `<button class="btn" data-restore="${t.id}">Restore</button>`}</td></tr>`).join('')}</tbody></table>`
     : `<div class="trash-empty"><h2>Trash is empty</h2>Deleted clips and replaced originals land here first, so nothing is gone until you say so.</div>`;
-  $('#danger').style.display = moved.length ? '' : 'none';
-  $('#dangerText').textContent = `Permanently deletes ${F.plural(moved.length, 'file')} (${F.size(b)}) from disk. This is the only step in Clip Buddy that can't be undone.`
-    + (moved.length < items.length ? ` Clips still in their undo window are not included.` : '');
+  $('#danger').style.display = gone.length ? '' : 'none';
+  $('#dangerText').textContent = `Permanently deletes ${F.plural(gone.length, 'file')} (${F.size(b)}) from disk. This is the only step in Clip Buddy that can't be undone.`
+    + (moved.length < items.length ? ` Clips still in their undo window are not included.` : '')
+    + (safe.length ? ` ${F.plural(safe.length, 'file')} that ${safe.length > 1 ? 'are' : 'is'} the only copy of a kept clip ${safe.length > 1 ? 'are' : 'is'} kept.` : '');
   $('#holdLbl').textContent = `Empty trash (${F.size(b)})`;
+  $('#danger2').style.display = unknown.length ? '' : 'none';
+  $('#dangerText2').textContent = `Clip Buddy has no record of how ${F.plural(unknown.length, 'file')} (${F.size(totalOf(unknown))}) got here, `
+    + `for example after using another copy of the app. They may be clips you kept, so Empty trash leaves them. Restore the ones you want first.`;
+  $('#holdLbl2').textContent = `Delete ${F.plural(unknown.length, 'file')} of unknown origin`;
 }
 $('#trashList').onclick = e => { const r = e.target.closest('[data-restore]'); if (r) App.restore(r.dataset.restore); };
-(() => { // hold-to-confirm
-  const btn = $('#holdBtn'); let timer;
-  const start = e => { if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return; if (e.repeat || timer) return; e.preventDefault(); btn.classList.add('holding'); timer = setTimeout(() => { cancel(); App.emptyTrash(); }, 1600); };
+function holdToConfirm(btn, fn) {
+  let timer;
+  const start = e => { if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return; if (e.repeat || timer) return; e.preventDefault(); btn.classList.add('holding'); timer = setTimeout(() => { cancel(); fn(); }, 1600); };
   const cancel = () => { clearTimeout(timer); timer = null; btn.classList.remove('holding'); };
   btn.addEventListener('pointerdown', start); btn.addEventListener('keydown', start);
   ['pointerup', 'pointerleave', 'keyup', 'blur'].forEach(ev => btn.addEventListener(ev, cancel));
-})();
+}
+holdToConfirm($('#holdBtn'), () => App.emptyTrash());
+holdToConfirm($('#holdBtn2'), () => App.emptyTrash(true));
 
 /* ================= setup: choose the clips folder ================= */
 const Setup = {

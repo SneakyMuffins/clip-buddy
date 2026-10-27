@@ -60,6 +60,14 @@ def x(sql, args=()):
         return cur.lastrowid
 
 
+def count(sql, args=()):
+    """Run a change and return how many rows it touched (for claims: 0 means someone else got there first)."""
+    with _lock:
+        cur = _conn.execute(sql, args)
+        _conn.commit()
+        return cur.rowcount
+
+
 def update(clip_id, **fields):
     if not fields:
         return

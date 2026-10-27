@@ -13,8 +13,8 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import actions, config, db, encoders, scanner, worker
-from .config import CFG, DATA
+from . import __version__, actions, config, db, encoders, scanner, worker
+from .config import CFG, DATA, ROOT
 
 STATIC = Path(__file__).parent / "static"
 
@@ -89,7 +89,10 @@ def _analysis(cid):
 def clips(status: str = "all"):
     if status == "trash":
         rows = db.q(f"SELECT {FIELDS} FROM clips WHERE status='trash' ORDER BY trashed_at DESC")
-        return [_out(c) for c in rows]
+        for c in rows:
+            _out(c)
+            c["protected"] = actions.protected(c) if c["trashed_at"] else None
+        return rows
     rows = db.q(f"SELECT {FIELDS} FROM clips WHERE status!='trash' ORDER BY start_ts")
     for c in rows:
         _out(c)
@@ -118,12 +121,13 @@ def status():
     waiting = db.one("SELECT COUNT(*) n, SUM(size) b FROM clips WHERE analyzed=0 AND status!='trash'")
     left = waiting["n"]
     tr = db.one("SELECT COUNT(*) n, SUM(size) s FROM clips WHERE status='trash'")
+    unknown = db.one("SELECT COUNT(*) n FROM clips WHERE status='trash' AND trashed_at IS NOT NULL AND prev_path IS NULL")
     w = worker.state
     eta = worker.eta(waiting["b"] or 0)
     return {"doing": w["doing"], "jobs": pend, "errors": errs, "to_analyze": left,
             "to_index": w["to_index"], "analyzed_run": w["analyzed_run"], "eta_seconds": round(eta),
             "jobs_eta_seconds": round(worker.jobs_eta(pend)), "workers": w["workers"],
-            "trash": {"n": tr["n"], "size": tr["s"] or 0}}
+            "trash": {"n": tr["n"], "size": tr["s"] or 0, "unknown": unknown["n"]}}
 
 
 
@@ -185,9 +189,7 @@ def decide(cid: int, d: Decision):
     if c["busy"]:
         raise HTTPException(409, "clip is being processed")
     grace = CFG["grace_seconds"]
-    # a newer decision replaces a pending one; "previous status" stays what it was before that one
-    prev = c["prev_status"] if _pending_decision(cid) else c["status"]
-    db.x("UPDATE jobs SET state='cancelled' WHERE clip_id=? AND state='pending' AND kind IN ('keep','trash','temp')", (cid,))
+    prev = _replace_decision(cid, c)
     fields = dict(prev_status=prev, reviewed_at=time.time())
     if d.rating is not None:
         fields["rating"] = d.rating or None
@@ -219,6 +221,17 @@ def _pending_decision(cid):
     return db.one("SELECT id FROM jobs WHERE clip_id=? AND state='pending' AND kind IN ('keep','trash','temp')", (cid,))
 
 
+def _replace_decision(cid, c):
+    """Cancels a decision still in its undo window; returns the status from before it. If its job was claimed
+    a moment ago it can no longer be replaced (it is already moving the file)."""
+    pending = _pending_decision(cid)
+    if pending and not db.count("UPDATE jobs SET state='cancelled' WHERE id=? AND state='pending'", (pending["id"],)):
+        raise HTTPException(409, "clip is being processed")
+    if db.one("SELECT id FROM jobs WHERE clip_id=? AND state='running'", (cid,)):
+        raise HTTPException(409, "clip is being processed")
+    return c["prev_status"] if pending else c["status"]
+
+
 class UndoReq(BaseModel):
     ids: list[int] | None = None
 
@@ -232,9 +245,11 @@ def undo(u: UndoReq | None = None):
         ids = [j["clip_id"]] if j else []
     done = []
     for cid in ids:
-        if not _pending_decision(cid):
+        # only a decision that is really cancelled counts as undone: a lane may have claimed it just now
+        if not db.count("UPDATE jobs SET state='cancelled' WHERE clip_id=? AND state='pending' "
+                        "AND kind IN ('keep','trash','temp')", (cid,)):
             continue
-        db.x("UPDATE jobs SET state='cancelled' WHERE clip_id=? AND state='pending'", (cid,))
+        db.x("UPDATE jobs SET state='cancelled' WHERE clip_id=? AND state='pending' AND kind='rename'", (cid,))
         c = db.clip(cid)
         db.update(cid, status=c["prev_status"] or "new", reviewed_at=None, expires=None,
                   keep_start=None, keep_end=None)
@@ -281,7 +296,11 @@ def bulk(b: Ids):
         if b.action == "trash":
             if c["status"] == "trash":
                 continue
-            db.update(cid, prev_status=c["status"], status="trash")
+            try:
+                prev = _replace_decision(cid, c)   # a pending keep must not run after this delete
+            except HTTPException:
+                continue
+            db.update(cid, prev_status=prev, status="trash")
             db.add_job(cid, "trash", delay=CFG["grace_seconds"])   # undoable like a single delete
         else:
             db.add_job(cid, b.action)
@@ -301,14 +320,23 @@ def prioritize(b: Ids):
 def merge(b: Ids):
     if len(b.ids) < 2:
         raise HTTPException(400, "need two or more clips")
+    for cid in b.ids:
+        c = _need(cid)
+        if c["busy"] or c["status"] == "trash" or db.one(
+                "SELECT id FROM jobs WHERE clip_id=? AND state IN ('pending','running')", (cid,)):
+            raise HTTPException(409, "one of these clips is still being processed: try again in a few seconds")
     db.add_job(b.ids[0], "merge", {"ids": b.ids})
     worker.wake()
     return {"ok": True}
 
 
+class EmptyReq(BaseModel):
+    unknown: bool = False   # also delete files of unknown origin (asked for separately)
+
+
 @app.post("/api/trash/empty")
-def empty():
-    db.add_job(None, "empty_trash")
+def empty(r: EmptyReq | None = None):
+    db.add_job(None, "empty_trash", {"unknown": bool(r and r.unknown)})
     worker.wake()
     return {"ok": True}
 
@@ -318,18 +346,22 @@ def empty():
 def _count_clips(folder, limit=5000):
     n = 0
     for _, _, files in os.walk(folder):
-        n += sum(f.lower().endswith(".mp4") for f in files)
+        n += sum(f.lower().endswith(scanner.VIDEO_EXT) for f in files)
         if n >= limit:
             break
     return n
 
 
+CAPTURE_DIRS = ("NVIDIA", "Radeon ReLive", "Captures", "Medal", "Outplayed", "Overwolf", "SteelSeries Moments")
+
+
 def _candidates():
-    """Folders that probably hold NVIDIA clips: NVIDIA's default (Videos/NVIDIA), then Videos itself."""
+    """Folders that probably hold game clips: the default folders of NVIDIA, AMD, Xbox Game Bar, Medal,
+    Outplayed and SteelSeries under Videos (also on OneDrive and other drives), then Videos itself."""
     home = Path.home()
+    bases = [home / "Videos", home / "OneDrive" / "Videos", *(Path(f"{d}:/Videos") for d in "DEFGH")]
     seen, out = set(), []
-    for p in [home / "Videos" / "NVIDIA", home / "OneDrive" / "Videos" / "NVIDIA", home / "Videos",
-              *(Path(f"{d}:/Videos/NVIDIA") for d in "DEFGH")]:
+    for p in [*(b / d for b in bases for d in CAPTURE_DIRS), home / "Videos"]:
         try:
             if p.is_dir() and str(p).lower() not in seen:
                 seen.add(str(p).lower())
@@ -344,7 +376,7 @@ def _candidates():
 @app.get("/api/setup")
 def setup_info():
     return {"configured": config.configured(), "inbox": CFG["inbox"], "keepers": CFG["keepers"],
-            "trash": CFG["trash"], "candidates": _candidates()}
+            "trash": CFG["trash"], "candidates": _candidates(), "version": __version__, "app": str(ROOT)}
 
 
 _picker = threading.Lock()
@@ -385,7 +417,10 @@ def setup_check(r: SetupReq):
 @app.post("/api/setup")
 def setup(r: SetupReq):
     info = setup_check(r)
-    old = CFG["inbox"]
+    old, old_trash = CFG["inbox"], CFG["trash"]
+    if old_trash and os.path.normcase(old_trash) != os.path.normcase(info["trash"]):
+        # files already in the old Trash can still be emptied or restored from there
+        config.save(old_trash=[*CFG.get("old_trash", []), old_trash])
     config.save(inbox=info["path"])
     scanner._queue.clear()   # files found in the old folder
     worker.state["to_index"] = 0
@@ -393,6 +428,7 @@ def setup(r: SetupReq):
         # unreviewed clips of the old folder are no longer part of the library; decisions stay
         for c in db.q("SELECT id, path FROM clips WHERE status='new'"):
             if not os.path.normcase(c["path"]).startswith(os.path.normcase(info["path"])):
+                db.x("UPDATE jobs SET state='cancelled' WHERE clip_id=? AND state='pending'", (c["id"],))
                 db.x("DELETE FROM clips WHERE id=?", (c["id"],))
     worker.state["last_scan"] = 0
     worker.wake()
@@ -406,7 +442,8 @@ def media(cid: int):
     c = _need(cid)
     if not os.path.exists(c["path"]):
         raise HTTPException(404)
-    return FileResponse(c["path"], media_type="video/mp4")
+    kind = {".mkv": "video/x-matroska", ".mov": "video/quicktime"}.get(Path(c["path"]).suffix.lower(), "video/mp4")
+    return FileResponse(c["path"], media_type=kind)
 
 
 @app.get("/thumb/{cid}/{kind}")

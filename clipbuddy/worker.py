@@ -10,7 +10,6 @@ A clip is claimed by one lane at a time, so it is never analyzed while a job mov
 import json
 import os
 import re
-import shutil
 import threading
 import time
 import traceback
@@ -68,7 +67,7 @@ def _run_job(j):
     elif j["kind"] == "merge":
         actions.merge(args["ids"])
     elif j["kind"] == "empty_trash":
-        actions.empty_trash()
+        actions.empty_trash(unknown=bool(args.get("unknown")))
     else:
         raise actions.ActionError(f"unknown job {j['kind']}")
 
@@ -80,7 +79,7 @@ def _clip_ids(j):
 
 
 def _next_job(lane=None):
-    """Oldest due job, quick kinds first, whose clips are not being analyzed right now. Claims its clips.
+    """Oldest due job, quick kinds first, whose clips no other lane or analysis is working on. Claims its clips.
     lane "quick" takes only moves/renames, lane "slow" only encodes; None (the tests) takes either."""
     quick = ",".join(f"'{k}'" for k in QUICK_JOBS)
     only = {"quick": f"AND kind IN ({quick})", "slow": f"AND kind NOT IN ({quick})"}.get(lane, "")
@@ -89,13 +88,19 @@ def _next_job(lane=None):
     with _claim:
         for j in jobs:
             ids = _clip_ids(j)
-            if any(i in _analyzing for i in ids):
+            if any(i in _analyzing or (db.clip(i) or {}).get("busy") for i in ids):
+                continue   # e.g. a rename waits until the keep that is compressing this clip is done
+            # claim it only if it is still pending: an Undo may have cancelled it a moment ago
+            if not db.count("UPDATE jobs SET state='running' WHERE id=? AND state='pending'", (j["id"],)):
                 continue
-            db.x("UPDATE jobs SET state='running' WHERE id=?", (j["id"],))
             for i in ids:
                 db.update(i, busy=1)
             return j, ids
     return None, []
+
+
+def _open_elsewhere(e):
+    return getattr(e, "winerror", None) in (5, 32, 33)
 
 
 def job_step(lane=None):
@@ -110,7 +115,15 @@ def job_step(lane=None):
         db.x("UPDATE jobs SET state='done', finished=? WHERE id=?", (time.time(), j["id"]))
     except Exception as e:
         traceback.print_exc()
-        db.x("UPDATE jobs SET state='error', error=?, finished=? WHERE id=?", (str(e)[:500], time.time(), j["id"]))
+        args = json.loads(j["args"] or "{}")
+        tries = args.get("_tries", 0)
+        if _open_elsewhere(e) and tries < 5:
+            # the file is open in another program (often a player): nothing changed, try again in a minute
+            args["_tries"] = tries + 1
+            db.x("UPDATE jobs SET state='pending', args=?, not_before=? WHERE id=?",
+                 (json.dumps(args), time.time() + 60, j["id"]))
+        else:
+            db.x("UPDATE jobs SET state='error', error=?, finished=? WHERE id=?", (str(e)[:500], time.time(), j["id"]))
     finally:
         for i in ids:
             db.update(i, busy=0)
@@ -222,27 +235,68 @@ def _in_trash(name):
     return Path(trash) / name if trash and (Path(trash) / name).exists() else None
 
 
+QUOTED = re.compile(r"'([^']+)'|\"([^\"]+)\"")   # Python quotes a path that contains ' with double quotes
+
+
+def _paths_in(error):
+    return [Path((a or b).replace("\\\\", "\\")) for a, b in QUOTED.findall(error or "")]
+
+
+def _legacy_failed_keep(path):
+    """Up to 0.1.4 a keep could fail after its original went to the Trash (any name not in NVIDIA's pattern);
+    the failed job's error names the kept path."""
+    for j in db.q("SELECT id, error FROM jobs WHERE state='error' AND kind IN ('keep','compress') "
+                  "AND (error LIKE '[WinError 2]%' OR error LIKE '[Errno 2]%')"):
+        if any(os.path.normcase(str(p)) == os.path.normcase(str(path)) for p in _paths_in(j["error"])):
+            return j
+    return None
+
+
 def _remove_leftovers():
     """Temp files from a trim/compress/join that was cut off when the app closed (a join's can be GBs).
     Safe at startup: no job is running yet, and interrupted jobs start over from the original.
-    A finished trim/compress whose original already went to the Trash is the clip itself: it is put in
-    place, never deleted."""
+    Only the exact names Clip Buddy writes are touched. A finished trim/compress whose original already
+    went to the Trash as this clip's original is the clip itself: it is put in place, never deleted."""
     for root in [*scanner.roots(), Path(config.CFG["trash"]) if config.CFG["trash"] else None]:
         if not root or not root.exists():
             continue
         for f in root.rglob("*.cb-*"):
-            if not (f.is_file() and f.suffix.lower() in (".mp4", ".txt")):
+            m = scanner.TEMP_RE.match(f.name)
+            if not m or not f.is_file():
                 continue
-            m = re.match(r"^(.+)\.cb-(?:hevc|trim)\.mp4$", f.name)
-            original = f.with_name(m[1] + ".mp4") if m else None
             try:
-                if original and not original.exists() and _in_trash(original.name):
+                original = f.with_name(m["base"] + m["ext"]) if m["base"] else None
+                if original and not original.exists() and _finished_copy(f, original, m["kind"]):
                     os.replace(f, original)
-                    _mark_original(_in_trash(original.name), original)
+                    actions.log("replace", path=str(original), why="finished a trim/compress cut off at closing")
+                    if db.one("SELECT id FROM clips WHERE path=?", (str(original),)):
+                        scanner.index_file(original, **({"trimmed": 1} if m["kind"] == "trim" else {"compressed": 1}))
                 else:
                     f.unlink()
             except OSError:
                 pass
+
+
+def _finished_copy(tmp, original, kind):
+    """A temp file only takes its clip's place when the clip's original is in the Trash as 'replaced' by it
+    (or, from 0.1.4, unrecorded with a failed keep naming it), and the temp file is a whole clip."""
+    trashed = _in_trash(original.name)
+    if not trashed:
+        return False
+    row = db.one("SELECT prev_path, note FROM clips WHERE path=?", (str(trashed),))
+    replaced = bool(row) and (row["note"] or "").startswith("original, replaced") and \
+        os.path.normcase(row["prev_path"] or "") == os.path.normcase(str(original))
+    legacy = (not row or (row["note"] or "") == "found in the Trash folder") and bool(_legacy_failed_keep(original))
+    if not (replaced or legacy):
+        return False
+    try:
+        new, old = scanner.probe(tmp)["duration"], scanner.probe(trashed)["duration"]
+    except Exception:
+        return False
+    whole = new > 0 and (abs(new - old) < 1.5 if kind == "hevc" else new <= old + 0.5)
+    if whole and legacy:
+        _mark_original(trashed, original)
+    return whole
 
 
 def _mark_original(trashed, kept):
@@ -253,30 +307,48 @@ def _mark_original(trashed, kept):
 
 def _repair_failed_keeps():
     """Up to 0.1.4, keeping a clip whose name doesn't follow NVIDIA's pattern could fail after its original
-    had gone to the Trash, leaving the kept clip missing from Keepers. Put those originals back as kept."""
+    had gone to the Trash, leaving the kept clip missing from Keepers. Put those originals back as kept and
+    redo the keep with the range and title that were chosen. A file the user deleted since is left alone."""
     keepers = config.CFG["keepers"]
     if not keepers:
         return
-    for j in db.q("SELECT id, error FROM jobs WHERE state='error' AND kind IN ('keep', 'compress')"):
-        for raw in re.findall(r"'([^']+\.mp4)'", j["error"] or ""):
-            kept = Path(raw.replace("\\\\", "\\"))
+    for j in db.q("SELECT id, clip_id, kind, args, error FROM jobs WHERE state='error' AND kind IN ('keep','compress') "
+                  "AND (error LIKE '[WinError 2]%' OR error LIKE '[Errno 2]%')"):
+        for kept in _paths_in(j["error"]):
             trashed = _in_trash(kept.name)
             if not scanner._inside(kept, keepers) or kept.exists() or not trashed:
                 continue
-            kept.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(trashed), str(kept))
-            db.x("DELETE FROM clips WHERE path=?", (str(trashed),))
-            cid = scanner.index_file(kept, status="keep")
-            db.add_job(cid, "compress")
-            db.x("UPDATE jobs SET state='done', error=? WHERE id=?", ("repaired: the original is back in Keepers", j["id"]))
+            row = db.one("SELECT id, note FROM clips WHERE path=?", (str(trashed),))
+            if row and (row["note"] or "") != "found in the Trash folder":
+                continue   # recorded since: the user deleted it, or it is another clip's original
+            try:
+                kept.parent.mkdir(parents=True, exist_ok=True)
+                actions._move(trashed, kept, "repair: a keep that failed in an older version")
+            except OSError:
+                continue   # e.g. open in another program: it stays protected in the Trash, tried again next start
+            try:
+                if row:
+                    db.x("DELETE FROM clips WHERE id=?", (row["id"],))
+                cid = scanner.index_file(kept, status="keep", reviewed_at=time.time())
+                args = json.loads(j["args"] or "{}")
+                db.add_job(cid, "keep", {"start": args.get("start"), "end": args.get("end")} if j["kind"] == "keep" else {})
+                for r in db.q("SELECT args FROM jobs WHERE clip_id=? AND kind='rename' AND state='error'", (j["clip_id"],)):
+                    db.add_job(cid, "rename", json.loads(r["args"] or "{}"))
+                db.x("UPDATE jobs SET state='done', error=? WHERE id=?",
+                     ("repaired: the original is back in Keepers", j["id"]))
+            except Exception:
+                traceback.print_exc()
 
 
 def start():
     db.x("UPDATE jobs SET state='pending' WHERE state='running'")  # interrupted last time: try again
     db.x("UPDATE clips SET busy=0")
     db.x("UPDATE clips SET analyzed=0 WHERE analyzed=-1")          # failed analyses get one retry per start
-    _remove_leftovers()
-    _repair_failed_keeps()
+    for fix in (_remove_leftovers, _repair_failed_keeps):
+        try:
+            fix()
+        except Exception:
+            traceback.print_exc()   # a repair must never stop the app from starting
     state["workers"] = analysis_workers()
     # quick jobs (deletes, moves, renames) get their own lane so they never wait behind an encode
     threading.Thread(target=_lane, args=(lambda: job_step("quick"), "quick jobs"), daemon=True, name="clipbuddy-quick").start()

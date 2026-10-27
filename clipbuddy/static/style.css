@@ -280,6 +280,7 @@ td.act { text-align: right; width: 1%; }
 .th-r { text-align: right; }
 .danger { display: grid; grid-template-columns: 1fr auto; gap: var(--s5); align-items: center; margin: var(--s4) var(--s5) var(--s5); padding: var(--s4) var(--s5); border: 1px solid color-mix(in srgb, var(--del) 55%, var(--rule)); background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--del) 7%, var(--bg)) 0 10px, var(--bg) 10px 20px); }
 .danger h3 { font: 600 1.1rem var(--f-ui); color: var(--del); }
+.trash-list .note.protected { color: var(--warn); }
 .danger p { color: var(--ink-2); font-size: .88rem; margin-top: .2rem; max-width: 46rem; }
 .hold { position: relative; overflow: hidden; height: 3rem; padding: 0 1.3rem; border: 1px solid var(--del); background: #000; color: var(--del); font-weight: 700; font-size: 1rem; border-radius: var(--radius); display: flex; align-items: center; gap: .7rem; white-space: nowrap; user-select: none; }
 .hold::before { content: ''; position: absolute; inset: 0; background: var(--del); transform: scaleX(0); transform-origin: left; transition: transform .2s ease-out; }
