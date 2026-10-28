@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.6
+
+- **Fixed: "localhost refused to connect" on the first start after updating.** The one-time repair ran before the app answered, and the browser opened on a timer. The repair now runs in the background while the app is already up, and the browser opens once the app answers.
+
 ## 0.1.5
 
 Fixes bugs that could lose kept clips. **Update now.** Until the update has started once, don't empty the Trash.

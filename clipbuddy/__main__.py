@@ -3,6 +3,7 @@ import json
 import os
 import socket
 import threading
+import time
 import urllib.request
 import webbrowser
 
@@ -19,6 +20,15 @@ def _running(url):
             return json.loads(r.read())
     except Exception:
         return None
+
+
+def _open_when_ready(url):
+    """Open the browser once the app answers, not on a timer: a slow start would show 'refused to connect'."""
+    for _ in range(240):
+        if _running(url):
+            break
+        time.sleep(0.5)
+    webbrowser.open(url)
 
 
 def main():
@@ -48,7 +58,7 @@ def main():
                 pass
         raise SystemExit(1)
     if not os.environ.get("CLIPBUDDY_NO_BROWSER"):
-        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+        threading.Thread(target=_open_when_ready, args=(url,), daemon=True).start()
     print(f"Clip Buddy {__version__} running at {url}  (close this window or press Ctrl+C to stop)")
     uvicorn.Server(uvicorn.Config("clipbuddy.server:app", log_level="warning")).run(sockets=[sock])
 

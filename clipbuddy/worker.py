@@ -344,11 +344,19 @@ def start():
     db.x("UPDATE jobs SET state='pending' WHERE state='running'")  # interrupted last time: try again
     db.x("UPDATE clips SET busy=0")
     db.x("UPDATE clips SET analyzed=0 WHERE analyzed=-1")          # failed analyses get one retry per start
+    # the repairs can take a while (moving and reading files), so the page is already up while they run;
+    # the lanes start after them, so no job touches a file a repair is working on
+    threading.Thread(target=_repair_then_run, daemon=True, name="clipbuddy-start").start()
+
+
+def _repair_then_run():
+    state["doing"] = "checking the library"
     for fix in (_remove_leftovers, _repair_failed_keeps):
         try:
             fix()
         except Exception:
             traceback.print_exc()   # a repair must never stop the app from starting
+    state["doing"] = None
     state["workers"] = analysis_workers()
     # quick jobs (deletes, moves, renames) get their own lane so they never wait behind an encode
     threading.Thread(target=_lane, args=(lambda: job_step("quick"), "quick jobs"), daemon=True, name="clipbuddy-quick").start()
