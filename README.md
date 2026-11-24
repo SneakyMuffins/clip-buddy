@@ -1,13 +1,15 @@
 # Clip Buddy
 
-**Stop drowning in 1 GB game clips.** Clip Buddy finds the moment each NVIDIA Instant Replay clip was saved for, lets you keep or delete it in a few seconds from the keyboard, trims what you keep to the moment without quality loss, and compresses it about 4.5× smaller.
+**Sort hundreds of game clips in minutes.** Clip Buddy finds the moment each clip was saved for, lets you keep or delete it in a few seconds from the keyboard, trims what you keep to the moment without quality loss, and compresses it about 4.5× smaller. It works with any recorder (NVIDIA, AMD, OBS, Xbox Game Bar, Steam, Medal) and runs on your PC only.
+
+**[⬇ Download for Windows](https://github.com/SneakyMuffins/clip-buddy/releases/latest)** · free, open source, nothing to install · [first-start note](#windows-download-recommended)
 
 [![tests](https://github.com/SneakyMuffins/clip-buddy/actions/workflows/ci.yml/badge.svg)](https://github.com/SneakyMuffins/clip-buddy/actions/workflows/ci.yml)
 ![platform](https://img.shields.io/badge/platform-Windows-blue)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-![Review screen](docs/screenshots/review.png)
+![Reviewing clips: keep, delete, keep, keep for 30 days, each with one key](docs/demo.gif)
 
 A 90-second 1440p60 replay is about 1 GB, and you probably wanted 15 seconds of it. Clip Buddy turns that into a ~40 MB file with the moment in it, and gets you through a backlog of a hundred clips in one sitting.
 
@@ -15,7 +17,7 @@ Everything runs locally. Nothing is uploaded, and nothing is deleted until you e
 
 ## Features
 
-- **Finds the moment.** Audio loudness, voice and on-screen motion, weighted toward the end of the clip, because Instant Replay saves what happened *before* you pressed the hotkey. Shown as a waveform with the suggested range already set.
+- **Finds the moment.** Audio loudness, voice and on-screen motion, weighted toward the end of the clip, because a replay recorder saves what happened *before* you pressed the hotkey. Shown as a waveform with the suggested range already set.
 - **Keyboard triage.** `K` keep, `T` keep for 30 days, `D` delete, `U` undo. Each clip starts playing just before its moment.
 - **Lossless trim.** Kept clips are cut to the range without re-encoding.
 - **Compression with a quality check.** HEVC on your GPU (NVIDIA, AMD or Intel) or the CPU. Every file is checked with VMAF and must score 95+ before it replaces the original.
@@ -44,9 +46,9 @@ Everything runs locally. Nothing is uploaded, and nothing is deleted until you e
 2. Unzip it somewhere permanent, for example `Documents\Clip Buddy`.
 3. Double-click **`ClipBuddy.exe`**.
 
-Nothing else to install: ffmpeg is included. Clip Buddy opens in your browser and asks where your clips are. NVIDIA's default folder, `Videos\NVIDIA`, is detected automatically.
+Nothing else to install: ffmpeg is included. Clip Buddy opens in your browser and asks where your clips are. The usual folders of NVIDIA, AMD, Xbox Game Bar and Medal are suggested automatically.
 
-Windows may show "Windows protected your PC" the first time, because the exe is not code-signed: click **More info**, then **Run anyway**.
+**First start:** Windows may show "Windows protected your PC", because the exe is not code-signed (a certificate costs money, and this is a free project). Click **More info**, then **Run anyway**. The app is open source and built from this repository by GitHub Actions, so you can check exactly what runs.
 
 **To update:** close Clip Buddy, then unzip the new version over the old folder. If you unzip it somewhere new instead, copy the `data` folder and `config.json` from the old folder into the new one before starting it: they hold your decisions. Your clips themselves stay where they are either way.
 
@@ -71,6 +73,8 @@ clipbuddy
 The first run analyzes your library in the background, a few seconds per clip. The top bar shows how far along it is and roughly how long is left. You can start reviewing right away: the clip you're looking at is always analyzed first.
 
 **Analysis runs in the Clip Buddy console window, not in the browser.** Close or reload the browser tab whenever you like; reopen `http://localhost:8765` to come back. Keep the console window open (minimized is fine) while it works. If you close it, nothing is lost: finished clips stay analyzed, and it continues where it stopped next time. New clips appear automatically while it runs.
+
+![Review screen](docs/screenshots/review.png)
 
 | Key | Action |
 |---|---|
